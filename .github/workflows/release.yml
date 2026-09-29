@@ -1,0 +1,78 @@
+# Builds the desktop app for Linux, Windows and macOS and attaches the installers to a GitHub Release.
+# Trigger: push a tag like v0.1.0  (git tag v0.1.0 && git push origin v0.1.0) — or run it manually.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04        # older glibc → the AppImage runs on most distros (Ubuntu 22.04+, Debian 12, Kali)
+            target: --linux AppImage deb
+          - os: windows-latest
+            target: --win nsis
+          - os: macos-14            # Apple Silicon
+            target: --mac dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Engine — install and test
+        run: |
+          pip install -e ".[dev]" pyinstaller
+          python -m pytest -q
+
+      - name: Engine — freeze with PyInstaller + fetch llama.cpp
+        run: python packaging/prepare.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Desktop — build installers
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"   # unsigned builds for the MVP
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm ci
+          npm run build
+          npx electron-builder ${{ matrix.target }} --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: armorix-${{ matrix.os }}
+          path: |
+            desktop/release/Armorix-*.AppImage
+            desktop/release/Armorix-*.deb
+            desktop/release/Armorix-*.exe
+            desktop/release/Armorix-*.dmg
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
