@@ -12,7 +12,8 @@ PY_EVAL = {("", "eval"), ("", "exec")}
 JS_CP_OBJECTS = {"child_process", "cp", "childProcess", "require('child_process')", 'require("child_process")'}
 JS_SHELL = {"exec", "execSync"}
 JS_SPAWN = {"spawn", "spawnSync", "execFile", "execFileSync"}
-PY_SHELL = {("os", "system"), ("os", "popen"), ("commands", "getoutput")}
+PY_SHELL = {("os", "system"), ("os", "popen"), ("commands", "getoutput"), ("subprocess", "getoutput"), ("subprocess", "getstatusoutput"),
+            ("asyncio", "create_subprocess_shell")}
 PY_SUBPROCESS = {"run", "call", "check_call", "check_output", "Popen"}
 
 

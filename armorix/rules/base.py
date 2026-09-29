@@ -19,6 +19,10 @@ class Rule:
     description: str = ""
     families: tuple[str, ...] = ("js", "py")
 
+    def wants(self, src: SourceFile) -> bool:
+        """Cheap pre-filter on the file (name, text) before `check` runs."""
+        return True
+
     def check(self, src: SourceFile, taint: Analyzer | None) -> list[Finding]:
         raise NotImplementedError
 
@@ -128,6 +132,10 @@ class CallSinkRule(Rule):
     def skip(self, src: SourceFile, call: Node, arg: Node) -> bool:
         return False
 
+    def weak(self, taint: Analyzer, arg: Node) -> bool:
+        """An untainted argument that is not worth a lower-confidence finding."""
+        return False
+
     def guarded(self, call: Node) -> bool:
         if not self.guards:
             return False
@@ -153,6 +161,6 @@ class CallSinkRule(Rule):
             if via:
                 out.append(finding(self, src, call, self.tainted,
                                    self.msg_tainted.format(src=taint.root(via), name=name), fix, taint, via))
-            elif self.dynamic is not None and arg.type not in {"arrow_function", "function_expression", "lambda", "number", "true", "false"}:
+            elif self.dynamic is not None and not self.weak(taint, arg) and arg.type not in {"arrow_function", "function_expression", "lambda", "number", "true", "false"}:
                 out.append(finding(self, src, call, self.dynamic, self.msg_dynamic.format(name=name), fix))
         return out

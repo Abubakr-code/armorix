@@ -80,3 +80,39 @@ def test_task_without_path_asks_for_folder(api):
 def test_unknown_folder(api):
     reply = api("POST", "/task", {"text": "check /no/such/dir", "lang": "en"})
     assert reply["job"] is None and "not found" in reply["reply"]
+
+
+def test_history_file_and_suppress(api, tmp_path):
+    project = tmp_path / "shop"
+    project.mkdir()
+    (project / "a.py").write_text("import os\nos.system('ping ' + request.args['h'])\n")
+    job = api("POST", "/jobs", {"kind": "scan", "path": str(project)})["job"]
+    view = wait(api, job)
+    assert view["status"] == "done"
+    entry = view["result"]["history"]
+    assert entry["score"] < 100 and entry["grade"] in "BCDF" and entry["diff"]["first"]
+    finding = view["result"]["findings"][0]
+    assert finding["fingerprint"] and finding["rule"] == "ARX-CMDI"
+
+    projects = api("GET", "/projects")["projects"]
+    assert any(p["root"] == str(project) for p in projects)
+    scans = api("GET", f"/history?root={project}")["scans"]
+    assert scans[0]["id"] == entry["id"]
+    restored = api("GET", f"/scans/{entry['id']}?lang=uz")
+    assert restored["findings"][0]["title"] == "OS buyruq in'ektsiyasi"
+
+    shown = api("GET", f"/file?path={project / 'a.py'}")
+    assert "os.system" in shown["text"] and shown["rel"] == "a.py"
+    with pytest.raises(urllib.error.HTTPError) as err:
+        api("GET", "/file?path=/etc/passwd")
+    assert err.value.code == 403
+
+    assert api("POST", "/suppress", {"path": str(project / "a.py"), "line": 2, "rule": "ARX-CMDI"})["ok"]
+    again = wait(api, api("POST", "/jobs", {"kind": "scan", "path": str(project)})["job"])
+    assert again["result"]["findings"] == [] and again["result"]["suppressed"] == 1
+    assert again["result"]["history"]["diff"]["fixed"] == 1 and again["result"]["history"]["score"] == 100
+
+
+def test_rules_catalog(api):
+    rules = api("GET", "/rules?lang=ru")["rules"]
+    assert len(rules) >= 38 and any(r["id"] == "ARX-SQLI" and r["title"] == "SQL-инъекция" for r in rules)

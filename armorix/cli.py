@@ -22,14 +22,16 @@ from .finding import Severity
 from . import fixer, i18n, runtime
 from .ai import AIUnavailable, LocalAI
 from .deps import osv
+from .project import load_config, write_baseline
+from .report_ci import to_github, to_markdown
 from .report_html import to_html
 from .report_sarif import to_sarif
 from .rules import ALL_RULES
-from .scanner import ScanResult, scan
+from .scanner import ScanResult, scan, severity_counts
 
 COLORS = {Severity.CRITICAL: "bold white on red", Severity.HIGH: "bold red", Severity.MEDIUM: "bold yellow", Severity.LOW: "cyan"}
 ACCENT = "#7088ff"
-FAMILY_NAMES = {"js": "JS/TS", "py": "Python"}
+FAMILY_NAMES = {"js": "JS/TS", "py": "Python", "c": "C/C++", "php": "PHP", "go": "Go", "java": "Java"}
 
 
 def render(result: ScanResult, console: Console, lang: str = "en") -> None:
@@ -46,6 +48,12 @@ def render(result: ScanResult, console: Console, lang: str = "en") -> None:
         console.print(f"[dim]{t('deps'):<{pad}}[/]{t('deps_ok', n=f'{result.dependencies:,}')}\n")
     else:
         console.print(f"[dim]{t('deps'):<{pad}}[/][yellow]{t('deps_off')}[/]\n")
+    if result.config:
+        console.print(f"[dim]{t('config')}: {escape(result.config)}[/]")
+    if result.baselined or result.suppressed:
+        console.print(f"[dim]{t('hidden', b=result.baselined, s=result.suppressed)}[/]")
+    if result.config or result.baselined or result.suppressed:
+        console.print()
 
     width = max(len(t("source")), len(t("flows")), len(t("sink")))
     for f in result.findings:
@@ -92,6 +100,9 @@ def to_json(result: ScanResult, lang: str = "en") -> str:
             "files": result.files,
             "lines": result.lines,
             "seconds": round(result.seconds, 3),
+            "counts": severity_counts(result.findings),
+            "suppressed": result.suppressed,
+            "baselined": result.baselined,
             "findings": [_finding_json(f, lang) for f in result.findings],
         },
         indent=2,
@@ -115,12 +126,19 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     p_scan = sub.add_parser("scan", help="scan a file or project directory")
     p_scan.add_argument("path", nargs="?", default=".")
-    p_scan.add_argument("--format", choices=["text", "json", "sarif", "html"], default="text")
+    p_scan.add_argument("--format", choices=["text", "json", "sarif", "html", "markdown", "github"], default="text",
+                        help="github = inline annotations in GitHub Actions; markdown = PR comment / job summary")
     p_scan.add_argument("-o", "--output", help="write the report to a file (html defaults to armorix-report.html)")
     p_scan.add_argument("--staged", action="store_true", help="scan only files staged in git (what the next commit contains)")
     p_scan.add_argument("--lang", choices=list(i18n.LANGS), help="output language (default: $ARMORIX_LANG / $LANG / en)")
     p_scan.add_argument("--fail-on", default="high", choices=[s.name.lower() for s in Severity] + ["none"],
                         help="exit with code 1 when a finding of this severity or higher exists (default: high)")
+    p_scan.add_argument("--baseline", metavar="FILE", help="hide findings recorded in this baseline (report only new ones)")
+    p_scan.add_argument("--write-baseline", metavar="FILE", help="record the current findings as the baseline and exit 0")
+    p_scan.add_argument("--exclude", action="append", default=[], metavar="PATTERN", help="skip paths (gitignore style); repeatable")
+    p_scan.add_argument("--disable", action="append", default=[], metavar="RULE", help="turn a rule off, e.g. ARX-WEAKHASH; repeatable")
+    p_scan.add_argument("--include-tests", action="store_true", help="also scan test folders and *.test.* / test_*.py files")
+    p_scan.add_argument("--no-cache", action="store_true", help="re-analyse every file instead of reusing cached results")
     p_fix = sub.add_parser("fix", help="let the local AI patch findings; every patch is re-scanned before it counts")
     p_fix.add_argument("path", nargs="?", default=".")
     p_fix.add_argument("--apply", action="store_true", help="write verified patches (a .armorix.bak backup is kept)")
@@ -149,6 +167,13 @@ def main(argv: list[str] | None = None) -> int:
     p_hook.add_argument("path", nargs="?", default=".")
     p_hook.add_argument("--fail-on", default="critical", choices=[s.name.lower() for s in Severity])
 
+    p_init = sub.add_parser("init", help="create armorix.toml (and optionally a GitHub Actions workflow) in a project")
+    p_init.add_argument("path", nargs="?", default=".")
+    p_init.add_argument("--ci", action="store_true", help="also write .github/workflows/armorix.yml")
+
+    p_rules = sub.add_parser("rules", help="list every rule with its CWE")
+    p_rules.add_argument("--lang", choices=list(i18n.LANGS))
+
     p_db = sub.add_parser("db", help="manage the offline vulnerability database (OSV)")
     p_db.add_argument("action", choices=["update", "status"])
     p_db.add_argument("--from", dest="from_dir", help="import OSV all.zip archives from a folder (USB / air-gapped transfer)")
@@ -157,6 +182,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if ns.command == "db":
         return _db(ns)
+    if ns.command == "init":
+        return _init(ns)
+    if ns.command == "rules":
+        return _rules(ns)
     if ns.command == "fix":
         return _fix(ns)
     if ns.command == "hook":
@@ -187,10 +216,28 @@ def main(argv: list[str] | None = None) -> int:
         with Console(stderr=True).status("deep scan…") as status:
             result = deep_scan(ns.path, ai, lambda ph, d, t, x="": status.update(f"{ph} {d}/{t} {x}"))
     else:
-        result = scan(ns.path)
-    if ns.format in {"json", "sarif", "html"}:
+        try:
+            config = load_config(Path(ns.path).resolve())
+        except ValueError as exc:
+            print(f"armorix: {exc}", file=sys.stderr)
+            return 2
+        config.exclude += ns.exclude
+        config.disable |= {r.upper() for r in ns.disable}
+        config.include_tests |= ns.include_tests
+        baseline = Path(ns.baseline) if ns.baseline else None
+        if ns.write_baseline:
+            baseline = set()  # record everything, including what an older baseline hid
+        if baseline is not None and not isinstance(baseline, set) and not baseline.exists():
+            print(f"armorix: baseline not found: {baseline}", file=sys.stderr)
+            return 2
+        result = scan(ns.path, config=config, baseline=baseline, use_cache=not ns.no_cache)
+        if ns.write_baseline:
+            n = write_baseline(Path(ns.write_baseline), result.findings)
+            print(i18n.ui(i18n.detect(ns.lang), "baseline_written", n=n, path=ns.write_baseline), file=sys.stderr)
+            return 0
+    if ns.format in {"json", "sarif", "html", "markdown", "github"}:
         lang = i18n.detect(ns.lang)
-        payload = to_html(result, lang) if ns.format == "html" else to_json(result, lang) if ns.format == "json" else to_sarif(result)
+        payload = {"html": to_html, "json": to_json, "markdown": to_markdown, "github": to_github}.get(ns.format, lambda r, _l: to_sarif(r))(result, lang)
         output = ns.output or ("armorix-report.html" if ns.format == "html" else None)
         if output:
             with open(output, "w", encoding="utf-8") as fh:
@@ -382,6 +429,83 @@ def _ai(ns) -> int:
     engine = "Ollama" if st["ollama"] else (st["engine"] or "not installed")
     print(f"engine: {engine}\nmodel:  {'ready' if st['model'] or st['ollama'] else 'not downloaded'}\nready:  {st['ready']}")
     return 0 if st["ready"] else 1
+
+
+CONFIG_TEMPLATE = """# Armorix project settings — https://github.com/Abubakr-code/armorix
+[scan]
+# Paths to skip (gitignore style). Test folders are skipped unless include_tests = true.
+exclude = [
+  # "legacy/",
+  # "public/vendor/*.js",
+]
+# Rules to turn off, e.g. "ARX-WEAKHASH". List them all: armorix rules
+disable = []
+# Hide findings below this level: low | medium | high | critical
+min_severity = "low"
+include_tests = false
+# Known findings to hide so CI fails only on new ones. Create it with:
+#   armorix scan --write-baseline armorix-baseline.json
+# baseline = "armorix-baseline.json"
+"""
+
+WORKFLOW_TEMPLATE = """# Armorix — offline code audit on every push and pull request.
+name: armorix
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Armorix
+        run: curl -fsSL https://abubakr-code.github.io/install.sh | sh
+      - name: Scan
+        run: |
+          ~/.armorix/bin/armorix scan . --format github --fail-on high
+          ~/.armorix/bin/armorix scan . --format markdown --fail-on none >> "$GITHUB_STEP_SUMMARY"
+"""
+
+
+def _init(ns) -> int:
+    root = Path(ns.path).resolve()
+    written = []
+    cfg = root / "armorix.toml"
+    if not cfg.exists() and not (root / ".armorix.toml").exists():
+        cfg.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+        written.append(cfg)
+    if ns.ci:
+        wf = root / ".github" / "workflows" / "armorix.yml"
+        if not wf.exists():
+            wf.parent.mkdir(parents=True, exist_ok=True)
+            wf.write_text(WORKFLOW_TEMPLATE, encoding="utf-8")
+            written.append(wf)
+    for path in written:
+        print(f"created {path}")
+    if not written:
+        print("nothing to do — the files already exist")
+    return 0
+
+
+def _rules(ns) -> int:
+    from .deps.check import DependencyRule
+
+    lang = i18n.detect(ns.lang)
+    console = Console(highlight=False)
+    table = Table(box=None, padding=(0, 2), show_header=True, header_style="dim")
+    table.add_column("ID")
+    table.add_column("CWE")
+    table.add_column("")
+    for rule in [*ALL_RULES, DependencyRule()]:
+        title = i18n.RULES.get(rule.id, {}).get(lang, (rule.title,))[0] or rule.title
+        table.add_row(Text(rule.id, style=f"bold {ACCENT}"), rule.cwe, title)
+    console.print(table)
+    return 0
 
 
 def _db(ns) -> int:

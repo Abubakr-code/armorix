@@ -61,11 +61,12 @@ class FakeAI:
 
 
 def test_ai_review_filters_hallucinations(tmp_path):
-    (tmp_path / "a.js").write_text("app.put('/p', async (req, res) => {\n  await User.update(req.session.uid, req.body);\n  res.sendStatus(204);\n});\n")
-    reply = ('{"issues": [{"type": "mass-assignment", "line": 2, "why": "req.body passed whole", "confidence": 0.9},'
-             '{"type": "sql-injection", "line": 2, "why": "x", "confidence": 1},'   # not a review type
+    (tmp_path / "a.js").write_text("app.put('/p', async (req, res) => {\n  const data = req.body;\n  await User.update(req.session.uid, data);\n"
+                                   "  res.sendStatus(204);\n});\n")
+    reply = ('{"issues": [{"type": "mass-assignment", "line": 3, "why": "req.body passed whole", "confidence": 0.9},'
+             '{"type": "sql-injection", "line": 3, "why": "x", "confidence": 1},'   # not a review type
              '{"type": "logic", "line": 99, "why": "x", "confidence": 1},'          # line outside handler
-             '{"type": "data-exposure", "line": 3, "why": "x", "confidence": 0.3}]}')  # low confidence
+             '{"type": "data-exposure", "line": 4, "why": "x", "confidence": 0.3}]}')  # low confidence
     (f,) = ai_review(FakeAI(reply), scan(tmp_path, deps=False))
-    assert f.rule_id == "ARX-AI-MASS-ASSIGNMENT" and f.line == 2 and f.data["ai"]
+    assert f.rule_id == "ARX-AI-MASS-ASSIGNMENT" and f.line == 3 and f.data["ai"]
     assert ai_review(FakeAI("not json"), scan(tmp_path, deps=False)) == []

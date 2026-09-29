@@ -253,6 +253,122 @@ RULES.update({
 })
 
 
+# Application logic, CI and infrastructure (v0.3).
+RULES.update({
+    "ARX-MASS": {
+        "uz": ("Ommaviy yozish (mass assignment)", "So'rov tanasi to'liqligicha modelga yozilyapti — foydalanuvchi isAdmin, role yoki balance kabi maydonni ham o'zgartira oladi.",
+               "Faqat ruxsat etilgan maydonlarni ko'chiring (allow-list yoki zod / pydantic sxemasi) va keyin saqlang."),
+        "ru": ("Массовое присвоение (mass assignment)", "Тело запроса целиком записывается в модель — пользователь может изменить поля вроде isAdmin, role или balance.",
+               "Копируйте только разрешённые поля (allow-list или схема zod / pydantic) и только потом сохраняйте."),
+        "en": ("Mass assignment", "", ""),
+    },
+    "ARX-PROTO": {
+        "uz": ("Prototype pollution", "Ishonchsiz kalitlar obyektlarga birlashtirilyapti — `__proto__` kaliti jarayondagi barcha obyektlarni o'zgartiradi (auth chetlab o'tish, RCE).",
+               "Faqat ma'lum kalitlarni birlashtiring (yoki Object.create(null) / Map), __proto__ / constructor / prototype ni rad eting, lodash ≥ 4.17.21."),
+        "ru": ("Загрязнение прототипа", "Непроверенные ключи сливаются в объекты — ключ `__proto__` меняет все объекты процесса (обход авторизации, RCE).",
+               "Сливайте только известные ключи (или Object.create(null) / Map), отклоняйте __proto__ / constructor / prototype, lodash ≥ 4.17.21."),
+        "en": ("Prototype pollution", "", ""),
+    },
+    "ARX-REGEX": {
+        "uz": ("Regex in'ektsiyasi (ReDoS)", "Regulyar ifoda foydalanuvchi kiritgan qiymatdan tuziladi — (a+)+$ kabi naqsh serverni muzlatib qo'yadi.",
+               "Qiymatni ekranlang (_.escapeRegExp / re.escape) yoki oddiy matn sifatida solishtiring (includes / in)."),
+        "ru": ("Инъекция регулярного выражения (ReDoS)", "Регулярное выражение строится из ввода — шаблон вида (a+)+$ подвешивает сервер.",
+               "Экранируйте значение (_.escapeRegExp / re.escape) или сравнивайте как обычный текст (includes / in)."),
+        "en": ("Regular expression injection (ReDoS)", "", ""),
+    },
+    "ARX-COOKIE": {
+        "uz": ("Sessiya cookie'sida HttpOnly / Secure yo'q", "Sessiya yoki token cookie'sini JavaScript o'qiy oladi (XSS orqali o'g'irlanadi) yoki u shifrlanmagan HTTP orqali yuboriladi.",
+               "Sessiya va token cookie'lariga httpOnly: true, secure: true va sameSite: 'lax' qo'ying."),
+        "ru": ("Cookie сессии без HttpOnly / Secure", "Cookie сессии или токена доступна JavaScript (крадётся через XSS) или уходит по незашифрованному HTTP.",
+               "Ставьте httpOnly: true, secure: true и sameSite: 'lax' на cookie сессий и токенов."),
+        "en": ("Session cookie without HttpOnly / Secure", "", ""),
+    },
+    "ARX-RANDOM": {
+        "uz": ("Maxfiy qiymat uchun oldindan aytib bo'ladigan tasodifiy son", "Token, parol yoki kod kriptografik bo'lmagan generator (Math.random / random) bilan yaratilyapti — keyingi qiymatlarni taxmin qilish mumkin.",
+               "crypto.randomBytes / crypto.randomUUID yoki Python'da secrets.token_urlsafe() ishlating."),
+        "ru": ("Предсказуемое случайное значение для секрета", "Токен, пароль или код создаётся некриптографическим генератором (Math.random / random) — следующие значения можно предсказать.",
+               "Используйте crypto.randomBytes / crypto.randomUUID или secrets.token_urlsafe() в Python."),
+        "en": ("Predictable random value for a secret", "", ""),
+    },
+    "ARX-SIGNKEY": {
+        "uz": ("Imzo kaliti kod ichida", "JWT yoki sessiya cookie'lari kod ichiga yozilgan kalit bilan imzolanyapti — kodni ko'rgan har kim istalgan foydalanuvchi nomidan kira oladi.",
+               "Kalitni muhit o'zgaruvchisi yoki secret store'dan o'qing (process.env.JWT_SECRET / os.environ['SECRET_KEY']) va uni almashtiring."),
+        "ru": ("Ключ подписи в коде", "JWT или cookie сессии подписываются ключом, записанным в коде, — любой, кто видел код, может войти от имени любого пользователя.",
+               "Читайте ключ из переменной окружения или хранилища секретов (process.env.JWT_SECRET / os.environ['SECRET_KEY']) и перевыпустите его."),
+        "en": ("Hard-coded signing key", "", ""),
+    },
+    "ARX-XXE": {
+        "uz": ("XML tashqi entity (XXE)", "XML parser tashqi entity'larni ochyapti — yuklangan XML serverdagi fayllarni o'qishi yoki ichki URL'larga murojaat qilishi mumkin.",
+               "defusedxml ishlating yoki entity'larni o'chiring: lxml XMLParser(resolve_entities=False), libxmljs'da noent: true bermang."),
+        "ru": ("Внешние сущности XML (XXE)", "XML-парсер раскрывает внешние сущности — загруженный XML может читать файлы сервера или обращаться к внутренним URL.",
+               "Используйте defusedxml или отключите сущности: lxml XMLParser(resolve_entities=False), в libxmljs не передавайте noent: true."),
+        "en": ("XML external entities (XXE)", "", ""),
+    },
+    "ARX-AUTOESCAPE": {
+        "uz": ("Shablonda avtomatik ekranlash o'chirilgan", "HTML shablonlar o'zgaruvchilarni ekranlamasdan chiqaryapti — har qanday foydalanuvchi qiymati XSS'ga aylanadi.",
+               "Avtomatik ekranlashni yoqilgan holda qoldiring va faqat tozalangan, ishonchli HTML'ni safe deb belgilang."),
+        "ru": ("Автоэкранирование в шаблонах отключено", "HTML-шаблоны выводят переменные без экранирования — любое пользовательское значение становится XSS.",
+               "Оставьте автоэкранирование включённым и помечайте как safe только очищенный, доверенный HTML."),
+        "en": ("Template auto-escaping disabled", "", ""),
+    },
+    "ARX-CSRF": {
+        "uz": ("CSRF himoyasi o'chirilgan", "Holatni o'zgartiradigan view istalgan saytdan kelgan so'rovni qabul qiladi — zararli sahifa foydalanuvchi nomidan amal bajaradi.",
+               "@csrf_exempt ni olib tashlang; API uchun cookie o'rniga token (Authorization sarlavhasi) ishlating."),
+        "ru": ("Защита от CSRF отключена", "Изменяющий состояние обработчик принимает запросы с любого сайта — вредоносная страница действует от имени пользователя.",
+               "Уберите @csrf_exempt; для API используйте токен (заголовок Authorization) вместо cookie."),
+        "en": ("CSRF protection disabled", "", ""),
+    },
+    "ARX-PERMS": {
+        "uz": ("Hamma yoza oladigan fayl huquqlari", "Faylga kompyuterdagi har bir foydalanuvchi yoza oladigan qilinyapti (777 / 666).",
+               "Eng tor huquqni bering: maxfiy fayllar uchun 0o600, ochiq fayllar uchun 0o644, dasturlar uchun 0o755."),
+        "ru": ("Права на запись для всех", "Файл делается доступным для записи любому пользователю системы (777 / 666).",
+               "Давайте минимальные права: 0o600 для секретов, 0o644 для публичных файлов, 0o755 для программ."),
+        "en": ("World-writable file permissions", "", ""),
+    },
+    "ARX-TMPFILE": {
+        "uz": ("Xavfli vaqtinchalik fayl", "tempfile.mktemp() faqat nom qaytaradi — boshqa jarayon faylni birinchi bo'lib yaratib olishi mumkin.",
+               "tempfile.NamedTemporaryFile() yoki tempfile.mkstemp() ishlating."),
+        "ru": ("Небезопасный временный файл", "tempfile.mktemp() возвращает только имя — другой процесс может создать файл первым.",
+               "Используйте tempfile.NamedTemporaryFile() или tempfile.mkstemp()."),
+        "en": ("Insecure temporary file", "", ""),
+    },
+    "ARX-GHA-INJECT": {
+        "uz": ("GitHub Actions skript in'ektsiyasi", "Issue sarlavhasi, PR branch nomi yoki commit xabari to'g'ridan-to'g'ri shell qadamiga qo'yilyapti — istalgan odam CI'da buyruq bajarib, token va secret'larni o'g'irlaydi.",
+               "Qiymatni env orqali uzating (env: TITLE: ${{ github.event.issue.title }}) va skriptda \"$TITLE\" ishlating — run: ichida ${{ … }} qo'ymang."),
+        "ru": ("Инъекция в скрипт GitHub Actions", "Заголовок issue, имя ветки PR или сообщение коммита вставляются прямо в shell-шаг — любой может выполнить команды в CI и украсть токен и секреты.",
+               "Передавайте значение через env (env: TITLE: ${{ github.event.issue.title }}) и используйте \"$TITLE\" — не пишите ${{ … }} внутри run:."),
+        "en": ("GitHub Actions script injection", "", ""),
+    },
+    "ARX-GHA-PWN": {
+        "uz": ("Ishonchsiz PR kodi secret'lar bilan ishga tushadi (pwn request)", "pull_request_target / workflow_run ishi tashqi ishtirokchi kodini checkout qilib, yozish huquqi va secret'lar bilan bajaryapti.",
+               "Ishonchsiz kodni qurish uchun on: pull_request ishlating yoki pull_request_target'da PR head'ini checkout qilmang."),
+        "ru": ("Недоверенный код PR запускается с секретами (pwn request)", "Задание pull_request_target / workflow_run делает checkout кода внешнего участника и запускает его с правами записи и секретами.",
+               "Для сборки недоверенного кода используйте on: pull_request или не делайте checkout head PR в pull_request_target."),
+        "en": ("Untrusted pull request code runs with secrets (pwn request)", "", ""),
+    },
+    "ARX-DOCKER": {
+        "uz": ("Xavfli Dockerfile ko'rsatmasi", "Konteyner root sifatida ishlaydi, secret image qatlamlariga yozilgan yoki yuklab olingan skript to'g'ridan-to'g'ri shell'ga uzatilyapti.",
+               "USER bilan oddiy foydalanuvchiga o'ting, secret'larni ishga tushirishda bering (BuildKit --mount=type=secret), yuklamalarni sha256 bilan tekshiring, image versiyasini qotiring."),
+        "ru": ("Опасная инструкция Dockerfile", "Контейнер работает от root, секрет записан в слои образа или скачанный скрипт сразу передаётся в shell.",
+               "Переключитесь на обычного пользователя через USER, передавайте секреты при запуске (BuildKit --mount=type=secret), проверяйте загрузки по sha256, фиксируйте версию образа."),
+        "en": ("Risky Dockerfile instruction", "", ""),
+    },
+    "ARX-CONTAINER": {
+        "uz": ("Ortiqcha huquqli konteyner", "Konteyner privileged rejimda, host tarmog'i / PID'ini bo'lishadi yoki Docker socket ulangan — undan chiqib ketish host'da root beradi.",
+               "privileged va host namespace'larni o'chiring, /var/run/docker.sock ni ulamang, konteynerni minimal huquqli oddiy foydalanuvchi bilan ishga tushiring."),
+        "ru": ("Контейнер с избыточными правами", "Контейнер запущен в privileged-режиме, делит сеть / PID хоста или смонтирован Docker socket — побег из него даёт root на хосте.",
+               "Отключите privileged и общие namespace хоста, не монтируйте /var/run/docker.sock, запускайте от непривилегированного пользователя с минимумом прав."),
+        "en": ("Over-privileged container", "", ""),
+    },
+    "ARX-TF": {
+        "uz": ("Bulut resursi internetga ochiq", "Terraform bucket, ma'lumotlar bazasi yoki admin portni butun internetga ochyapti.",
+               "Kirishni ma'lum CIDR / security group'lar bilan cheklang, bucket'larni yopiq, bazalarni xususiy subnet'da saqlang."),
+        "ru": ("Облачный ресурс открыт в интернет", "Terraform открывает bucket, базу данных или административный порт всему интернету.",
+               "Ограничьте доступ известными CIDR / security group, держите bucket закрытыми, а базы — в приватных подсетях."),
+        "en": ("Publicly exposed cloud resource", "", ""),
+    },
+})
+
 DEP = {
     "uz": {"title": "Zaif kutubxona", "mal_title": "Zararli paket",
            "msg": "{pkg}@{ver}: {n} ta ma'lum zaiflik ({ids}) — {summary}",
@@ -280,7 +396,8 @@ UI = {
            "applied": "{n} ta patch qo'llandi", "writing": "lokal model patch yozmoqda…", "skipped": "o'tkazildi",
            "skipped_cfg": "konfiguratsiya qiymati — uni fayldan o'chiring va kalitni almashtiring",
            "dry": "sinov rejimi — yozish uchun [bold]--apply[/] qo'shing (zaxira: *.armorix.bak)", "to_patch": "{n} ta topilma (≥ {sev}) tuzatiladi — har bir patch qayta tahlil qilinadi",
-           "localhost": "tarmoq: faqat localhost"},
+           "localhost": "tarmoq: faqat localhost", "hidden": "yashirilgan: {b} ta baseline'da, {s} ta armorix-ignore bilan",
+           "cached": "{n} ta fayl keshdan", "config": "sozlama", "baseline_written": "{n} ta topilma baseline'ga yozildi → {path}"},
     "ru": {"target": "проект", "files": "файлы", "lines": "строк", "rules": "правил", "deps": "пакеты",
            "deps_ok": "{n} пакетов проверено по офлайн-базе OSV", "deps_off": "пропущено — один раз запустите [bold]armorix db update[/] для проверки CVE пакетов",
            "tagline": "локальный статический анализ", "network": "сеть: выкл", "fix": "исправление", "source": "источник", "flows": "поток", "sink": "сток",
@@ -292,7 +409,8 @@ UI = {
            "applied": "применено патчей: {n}", "writing": "локальная модель пишет патч…", "skipped": "пропущено",
            "skipped_cfg": "значение конфигурации — удалите его из файла и перевыпустите секрет",
            "dry": "пробный режим — добавьте [bold]--apply[/] для записи (резервные копии: *.armorix.bak)", "to_patch": "находок для исправления (≥ {sev}): {n} — каждый патч проверяется повторным сканированием",
-           "localhost": "сеть: только localhost"},
+           "localhost": "сеть: только localhost", "hidden": "скрыто: {b} в baseline, {s} через armorix-ignore",
+           "cached": "файлов из кэша: {n}", "config": "настройки", "baseline_written": "в baseline записано находок: {n} → {path}"},
     "en": {"target": "target", "files": "files", "lines": "lines", "rules": "rules", "deps": "deps",
            "deps_ok": "{n} packages checked against the offline OSV database", "deps_off": "skipped — run [bold]armorix db update[/] once to enable dependency CVE checks",
            "tagline": "local static analysis", "network": "network: off", "fix": "fix", "source": "source", "flows": "flows", "sink": "sink",
@@ -304,7 +422,8 @@ UI = {
            "applied": "applied {n} patch(es)", "writing": "local model is writing a patch…", "skipped": "skipped",
            "skipped_cfg": "config value — remove it from the file and rotate the secret",
            "dry": "dry run — add [bold]--apply[/] to write them (backups: *.armorix.bak)", "to_patch": "{n} finding(s) ≥ {sev} to patch — each patch is re-parsed and re-scanned before it counts",
-           "localhost": "network: localhost only"},
+           "localhost": "network: localhost only", "hidden": "hidden: {b} in baseline, {s} by armorix-ignore",
+           "cached": "{n} files from cache", "config": "config", "baseline_written": "wrote {n} finding(s) to the baseline → {path}"},
 }
 
 SEVERITY = {

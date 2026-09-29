@@ -19,12 +19,16 @@ from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import __version__, fixer, i18n, runtime
+from . import __version__, fixer, history, i18n, runtime
 from .ai import AIUnavailable
 from .deep import deep_scan
 from .deps import osv
+from .deps.check import DependencyRule
 from .finding import Severity
+from .project import add_suppression, load_config, write_baseline
 from .report_html import to_html
+from .report_sarif import to_sarif
+from .rules import ALL_RULES
 from .scanner import ScanResult, scan
 
 # ── task understanding (keyword based: reliable in uz / ru / en, no model needed) ──
@@ -88,7 +92,8 @@ JOBS: dict[str, Job] = {}
 def finding_view(f, lang: str, index: int) -> dict:
     title, message, fix = i18n.localize(f, lang)
     return {"id": index, "rule": f.rule_id, "cwe": f.cwe, "severity": f.severity.name.lower(), "severity_label": i18n.severity(lang, f.severity),
-            "title": title, "message": message, "fix": fix, "file": f.file, "line": f.line, "snippet": f.snippet,
+            "title": title, "message": message, "fix": fix, "file": f.file, "line": f.line, "column": f.column, "snippet": f.snippet,
+            "fingerprint": f.fingerprint,
             "trace": [{"line": s.line, "code": s.code, "label": i18n.ui(lang, s.label)} for s in f.trace],
             "ai": bool(f.data.get("ai")), "fixable": f.rule_id not in {"ARX-DEP", "ARX-SECRET-HISTORY", "ARX-NOAUTH"} and not f.file.startswith(".env")}
 
@@ -97,7 +102,38 @@ def result_view(result: ScanResult, lang: str) -> dict:
     counts = Counter(f.severity.name.lower() for f in result.findings)
     return {"root": str(result.root), "files": result.files, "lines": result.lines, "dependencies": result.dependencies,
             "db": result.db_available, "seconds": round(result.seconds, 2), "counts": {s.name.lower(): counts.get(s.name.lower(), 0) for s in Severity},
+            "languages": dict(result.languages), "suppressed": result.suppressed, "baselined": result.baselined, "cached": result.cached,
             "findings": [finding_view(f, lang, i) for i, f in enumerate(result.findings)]}
+
+
+def _config(p: dict):
+    """Project settings plus the overrides the desktop app sends (disabled rules, tests, extra excludes)."""
+    cfg = load_config(Path(p["path"]).resolve())
+    cfg.disable |= {str(r).upper() for r in p.get("disable") or []}
+    cfg.exclude += [str(x) for x in p.get("exclude") or []]
+    cfg.include_tests |= bool(p.get("include_tests"))
+    return cfg
+
+
+def rules_view(lang: str) -> list[dict]:
+    out = []
+    for rule in [*ALL_RULES, DependencyRule()]:
+        title, why, fix = i18n.RULES.get(rule.id, {}).get(lang, ("", "", ""))
+        out.append({"id": rule.id, "cwe": rule.cwe, "title": title or rule.title, "description": why or rule.description,
+                    "fix": fix, "families": list(getattr(rule, "families", ("*",)))})
+    return out
+
+
+def _within_known_root(path: Path) -> Path | None:
+    roots = {Path(r) for r in history.known_roots()} | {Path(j.params["path"]).resolve() for j in JOBS.values() if j.params.get("path")}
+    for root in roots:
+        base = root if root.is_dir() else root.parent
+        try:
+            path.relative_to(base)
+            return base
+        except ValueError:
+            continue
+    return None
 
 
 def _run(job: Job) -> None:
@@ -112,17 +148,24 @@ def _run(job: Job) -> None:
                 except AIUnavailable:
                     ai = None  # deep scan still runs its non-AI parts
             started = time.perf_counter()
-            result = (deep_scan(p["path"], ai, job.progress, job.cancelled) if job.kind == "deep"
-                      else scan(p["path"], progress=job.progress, cancelled=job.cancelled))
+            cfg = _config(p)
+            result = (deep_scan(p["path"], ai, job.progress, job.cancelled, cfg) if job.kind == "deep"
+                      else scan(p["path"], progress=job.progress, cancelled=job.cancelled, config=cfg))
             result.seconds = time.perf_counter() - started
             job.scan = result
-            job.result = result_view(result, lang) | {"ai_used": ai is not None}
+            entry = history.record(result, job.kind) if not job.cancelled() else None
+            job.result = result_view(result, lang) | {"ai_used": ai is not None, "history": entry}
         elif job.kind == "fix":
             ai = runtime.start()
             root = Path(p["path"]).resolve()
-            result = scan(root, deps=False, progress=job.progress)
+            result = scan(root, deps=False, progress=job.progress, config=_config(p))
+            prints = set(p.get("fingerprints") or [])
             wanted = set(p.get("findings") or [])
-            targets = [f for i, f in enumerate(result.findings) if (i in wanted if wanted else f.severity >= Severity.HIGH)][: int(p.get("limit", 8))]
+            if prints:
+                targets = [f for f in result.findings if f.fingerprint in prints]
+            else:
+                targets = [f for i, f in enumerate(result.findings) if (i in wanted if wanted else f.severity >= Severity.HIGH)]
+            targets = [f for f in targets if f.rule_id not in {"ARX-DEP", "ARX-SECRET-HISTORY", "ARX-NOAUTH"}][: int(p.get("limit", 8))]
             for i, f in enumerate(targets, 1):
                 if job.cancelled():
                     break
@@ -197,10 +240,40 @@ class Handler(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/jobs/(\w+)", path)
         if m and m.group(1) in JOBS:
             return self._send(200, JOBS[m.group(1)].view())
-        m = re.fullmatch(r"/report/(\w+)\.html", path)
+        m = re.fullmatch(r"/report/(\w+)\.(html|sarif|json)", path)
         if m and m.group(1) in JOBS and JOBS[m.group(1)].scan is not None:
             job = JOBS[m.group(1)]
-            return self._send(200, to_html(job.scan, job.params.get("lang", "en")), "text/html")
+            lang = self._query().get("lang") or job.params.get("lang", "en")
+            if m.group(2) == "sarif":
+                return self._send(200, to_sarif(job.scan), "application/sarif+json")
+            if m.group(2) == "json":
+                from .cli import to_json
+                return self._send(200, to_json(job.scan, lang), "application/json")
+            return self._send(200, to_html(job.scan, lang), "text/html")
+        q = self._query()
+        lang = i18n.detect(q.get("lang"))
+        if path == "/projects":
+            return self._send(200, {"projects": history.projects()})
+        if path == "/history":
+            return self._send(200, {"scans": history.history(q.get("root", ""))})
+        m = re.fullmatch(r"/scans/(\w+)", path)
+        if m:
+            loaded = history.load(m.group(1))
+            if loaded is None:
+                return self._send(404, {"error": "not found"})
+            summary, findings = loaded
+            return self._send(200, summary | {"findings": [finding_view(f, lang, i) for i, f in enumerate(findings)]})
+        if path == "/rules":
+            return self._send(200, {"rules": rules_view(lang)})
+        if path == "/file":
+            target = Path(q.get("path", "")).resolve()
+            base = _within_known_root(target)
+            if base is None or not target.is_file():
+                return self._send(403, {"error": "file is outside the scanned projects"})
+            if target.stat().st_size > 2_000_000:
+                return self._send(413, {"error": "file too large to preview"})
+            return self._send(200, {"path": str(target), "rel": target.relative_to(base).as_posix(),
+                                    "text": target.read_text(encoding="utf-8", errors="replace")})
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -229,6 +302,25 @@ class Handler(BaseHTTPRequestHandler):
             except AIUnavailable as exc:
                 return self._send(400, {"error": str(exc)})
             return self._send(200, runtime.status())
+        if path == "/suppress":
+            target = Path(body.get("path", "")).resolve()
+            if _within_known_root(target) is None or not target.is_file():
+                return self._send(403, {"error": "file is outside the scanned projects"})
+            ok = add_suppression(target, int(body.get("line", 0)), str(body.get("rule", "")))
+            return self._send(200 if ok else 400, {"ok": ok} if ok else {"error": "this file type has no comments — use a baseline instead"})
+        if path == "/baseline":
+            root = Path(body.get("root", "")).resolve()
+            job = next((j for j in reversed(list(JOBS.values())) if j.scan is not None and j.scan.root == root), None)
+            if job is None:
+                return self._send(400, {"error": "scan the project first"})
+            target = root / "armorix-baseline.json"
+            n = write_baseline(target, job.scan.findings)
+            cfg = root / "armorix.toml"
+            if not cfg.exists() and not (root / ".armorix.toml").exists():
+                cfg.write_text('[scan]\nbaseline = "armorix-baseline.json"\n', encoding="utf-8")
+            return self._send(200, {"ok": True, "count": n, "path": str(target)})
+        if path == "/projects/forget":
+            return self._send(200, {"removed": history.forget(str(body.get("root", "")))})
         m = re.fullmatch(r"/jobs/(\w+)/cancel", path)
         if m and m.group(1) in JOBS:
             JOBS[m.group(1)]._cancel = True

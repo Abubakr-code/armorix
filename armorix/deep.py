@@ -21,6 +21,7 @@ from .finding import Finding, Severity
 from .parsing import load
 from .rules.base import FUNCTION_TYPES
 from .rules.secrets import mask, match_secret
+from .project import assign_fingerprints
 from .scanner import ScanResult, discover, scan
 from .taint import Analyzer
 
@@ -242,8 +243,8 @@ def idor_candidates(result: ScanResult) -> list[Finding]:
     return out
 
 
-def deep_scan(target, ai: LocalAI | None = None, progress=None, cancelled=None) -> ScanResult:
-    result = scan(target, progress=progress, cancelled=cancelled)
+def deep_scan(target, ai: LocalAI | None = None, progress=None, cancelled=None, config=None) -> ScanResult:
+    result = scan(target, progress=progress, cancelled=cancelled, config=config)
     root = result.root if result.root.is_dir() else result.root.parent
     result.findings += git_history_secrets(root, progress, cancelled)
     has_auth, noauth = auth_overview(result)
@@ -252,6 +253,7 @@ def deep_scan(target, ai: LocalAI | None = None, progress=None, cancelled=None) 
         result.findings += [f for f in ai_review(ai, result, progress, cancelled)
                             # Without any auth system, per-handler "missing auth" only repeats ARX-NOAUTH.
                             if has_auth or f.data.get("kind") != "missing-auth"]
+    assign_fingerprints(result.findings)
     result.findings.sort(key=lambda f: (-f.severity, f.file, f.line))
     return result
 

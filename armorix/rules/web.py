@@ -103,6 +103,9 @@ class TemplateInjection(CallSinkRule):
     fix = {"py": "Keep templates in files (render_template) and pass user data as variables.",
            "js": "Compile only fixed template files and pass user data as render context."}
 
+    def weak(self, taint, arg):
+        return not taint.is_dynamic_string(arg)  # a template read from a file / setting is normal; one built from strings is not
+
     def matches(self, src, call):
         obj, name = callee(call)
         if src.family == "js" and name == "compile" and obj not in {"handlebars", "Handlebars", "ejs", "pug", "_"}:
@@ -203,9 +206,21 @@ class NoSqlInjection(Rule):
                                            f"`{text(value)}` is used as a query value without type casting — an object like "
                                            '{"$ne": null} bypasses the check.', self.FIX))
                         break
-            elif taint.is_source(query) or (query.type == "identifier" and text(query) in taint.info.tainted
-                                            and taint.info.tainted[text(query)].source in {"req.body", "req.query"}):
+            elif taint.is_source(query) or (query.type == "identifier" and taint.tainted_by(query)
+                                            and taint.root(taint.tainted_by(query)) in {"req.body", "req.query"}):
                 out.append(finding(self, src, call, Severity.HIGH,
                                    f"The whole request object `{text(query)}` is used as a database query.", self.FIX))
+        # `$where` built anywhere (a query helper, a criteria function) — not only inline in find()
+        reported = {f.line for f in out}
+        for node in src.nodes:
+            if node.type != "pair" or text(node.child_by_field_name("key")).strip("'\"") != "$where":
+                continue
+            value = node.child_by_field_name("value")
+            if value is None or taint.is_literal(value) or value.type in {"function_expression", "arrow_function"} or node.start_point[0] + 1 in reported:
+                continue
+            via = taint.tainted_by(value)
+            out.append(finding(self, src, node, Severity.CRITICAL if via else Severity.HIGH,
+                               f"`$where` runs JavaScript inside MongoDB with {'untrusted input `' + taint.root(via) + '`' if via else 'a string built at runtime'}.",
+                               self.FIX, taint, via))
         return out
 

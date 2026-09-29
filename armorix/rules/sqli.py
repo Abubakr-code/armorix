@@ -11,8 +11,10 @@ SQL = re.compile(
     r"\b(select\b[\s\S]*\bfrom|insert\s+into|update\s+[\w.`\"\[\]]+\s+set|delete\s+from|drop\s+table|where\b)",
     re.IGNORECASE,
 )
-JS_SINKS = {"query", "execute", "raw", "unsafe", "$queryRawUnsafe", "$executeRawUnsafe", "run", "all", "get", "prepare", "exec"}
-PY_SINKS = {"execute", "executemany", "executescript", "raw", "extra", "read_sql", "read_sql_query", "text"}
+JS_SINKS = {"query", "execute", "raw", "unsafe", "$queryRawUnsafe", "$executeRawUnsafe", "run", "all", "get", "prepare", "exec",
+            "whereRaw", "orWhereRaw", "havingRaw", "orderByRaw", "joinRaw", "fromRaw", "selectRaw", "literal"}
+PY_SINKS = {"execute", "executemany", "executescript", "raw", "extra", "read_sql", "read_sql_query", "text", "RawSQL", "fetch",
+            "fetchrow", "fetchval", "mogrify"}
 
 FIX = {
     "js": 'Pass values as bound parameters: db.query("SELECT * FROM users WHERE id = ?", [id])',
