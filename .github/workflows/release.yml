@@ -54,6 +54,11 @@ jobs:
           npm run build
           npx electron-builder ${{ matrix.target }} --publish never
 
+      - name: VS Code extension (.vsix)
+        if: runner.os == 'Linux'
+        working-directory: vscode
+        run: npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository -o ../desktop/release/Armorix-vscode.vsix
+
       - uses: actions/upload-artifact@v4
         with:
           name: armorix-${{ matrix.os }}
@@ -62,6 +67,7 @@ jobs:
             desktop/release/Armorix-*.deb
             desktop/release/Armorix-*.exe
             desktop/release/Armorix-*.dmg
+            desktop/release/Armorix-*.vsix
 
   release:
     needs: build

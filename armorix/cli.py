@@ -73,7 +73,17 @@ def render(result: ScanResult, console: Console, lang: str = "en") -> None:
         console.print(f"[yellow]skipped[/] {escape(err)}")
 
 
-def to_json(result: ScanResult) -> str:
+def _finding_json(f, lang: str) -> dict:
+    data = f.to_dict()
+    if lang != "en":  # editors show these strings directly
+        data["title"], data["message"], data["fix"] = i18n.localize(f, lang)
+        data["severity_label"] = i18n.severity(lang, f.severity)
+        for step in data["trace"]:
+            step["label_text"] = i18n.ui(lang, step["label"])
+    return data
+
+
+def to_json(result: ScanResult, lang: str = "en") -> str:
     return json.dumps(
         {
             "tool": "armorix",
@@ -82,7 +92,7 @@ def to_json(result: ScanResult) -> str:
             "files": result.files,
             "lines": result.lines,
             "seconds": round(result.seconds, 3),
-            "findings": [f.to_dict() for f in result.findings],
+            "findings": [_finding_json(f, lang) for f in result.findings],
         },
         indent=2,
         ensure_ascii=False,
@@ -121,6 +131,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_scan.add_argument("--deep", action="store_true", help="pentest-style pass: + git history secrets, auth/IDOR checks, AI handler review (slow)")
 
+    p_patch = sub.add_parser("patch", help="AI patch for one finding, as JSON (editor integrations)")
+    p_patch.add_argument("file")
+    p_patch.add_argument("--line", type=int, required=True)
+    p_patch.add_argument("--rule", required=True)
+    p_patch.add_argument("--model")
+
     p_ai = sub.add_parser("ai", help="manage the local AI engine (bundled llama.cpp or an existing Ollama)")
     p_ai.add_argument("action", choices=["status", "setup", "import"])
     p_ai.add_argument("file", nargs="?", help="GGUF model file for `import` (air-gapped machines)")
@@ -147,6 +163,8 @@ def main(argv: list[str] | None = None) -> int:
         return _hook(ns)
     if ns.command == "ai":
         return _ai(ns)
+    if ns.command == "patch":
+        return _patch(ns)
     if ns.command == "serve":
         from .server import serve
 
@@ -172,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         result = scan(ns.path)
     if ns.format in {"json", "sarif", "html"}:
         lang = i18n.detect(ns.lang)
-        payload = to_html(result, lang) if ns.format == "html" else {"json": to_json, "sarif": to_sarif}[ns.format](result)
+        payload = to_html(result, lang) if ns.format == "html" else to_json(result, lang) if ns.format == "json" else to_sarif(result)
         output = ns.output or ("armorix-report.html" if ns.format == "html" else None)
         if output:
             with open(output, "w", encoding="utf-8") as fh:
@@ -309,6 +327,38 @@ exec "{sys.executable}" -m armorix scan --staged --fail-on {ns.fail_on}
     hook.chmod(0o755)
     print(f"installed {hook} (fails on {ns.fail_on})")
     return 0
+
+
+def _patch(ns) -> int:
+    """Prints {verified, reason, new_text, diff, …} for the finding at --line with --rule."""
+    path = Path(ns.file).resolve()
+    out: dict = {"ok": False}
+    try:
+        ai = LocalAI(model=ns.model) if ns.model else runtime.start()
+        if ns.model:
+            ai.check()
+        findings = [f for f in scan(path, deps=False).findings if f.rule_id == ns.rule]
+        finding = min(findings, key=lambda f: abs(f.line - ns.line), default=None)
+        if finding is None or abs(finding.line - ns.line) > 3:
+            out["error"] = "finding not found — the file may have changed; save and rescan"
+        else:
+            patch = fixer.propose(ai, path, finding)
+            if patch is None:
+                out["error"] = "this finding cannot be patched automatically (configuration value)"
+            else:
+                original = path.read_text(encoding="utf-8")
+                new_text = original
+                if patch.verified:
+                    tmp = Path(tempfile.mkdtemp(prefix="armorix-patch-")) / path.name
+                    tmp.write_text(original, encoding="utf-8")
+                    fixer.apply(tmp, [patch])
+                    new_text = tmp.read_text(encoding="utf-8")
+                out = {"ok": True, "verified": patch.verified, "reason": patch.reason, "diff": patch.diff,
+                       "start": patch.start, "end": patch.end, "seconds": round(patch.seconds, 1), "new_text": new_text}
+    except AIUnavailable as exc:
+        out["error"] = str(exc)
+    print(json.dumps(out, ensure_ascii=False))
+    return 0 if out.get("ok") else 1
 
 
 def _ai(ns) -> int:

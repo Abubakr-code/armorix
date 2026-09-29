@@ -1,0 +1,128 @@
+{
+  "name": "armorix",
+  "displayName": "Armorix — offline AI code auditor",
+  "description": "Finds SQL injection, XSS, secrets, memory bugs (C/C++) and vulnerable dependencies as you code — and fixes them with a local AI. Your code never leaves the machine.",
+  "version": "0.2.0",
+  "publisher": "armorix",
+  "license": "SEE LICENSE IN README.md",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Abubakr-code/armorix.git"
+  },
+  "homepage": "https://abubakr-code.github.io",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "security",
+    "sast",
+    "vulnerability",
+    "offline",
+    "ai",
+    "cwe",
+    "owasp"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:javascript",
+    "onLanguage:javascriptreact",
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact",
+    "onLanguage:python",
+    "onLanguage:c",
+    "onLanguage:cpp",
+    "workspaceContains:**/package-lock.json",
+    "workspaceContains:**/requirements.txt"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "armorix.scanFile",
+        "title": "Armorix: Scan current file",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "armorix.scanWorkspace",
+        "title": "Armorix: Scan workspace"
+      },
+      {
+        "command": "armorix.fixFinding",
+        "title": "Armorix: Fix with local AI"
+      },
+      {
+        "command": "armorix.clear",
+        "title": "Armorix: Clear findings"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "armorix.scanFile",
+          "group": "navigation",
+          "when": "resourceScheme == file"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "armorix.fixFinding",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Armorix",
+      "properties": {
+        "armorix.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the armorix executable. Empty: search PATH and the Armorix desktop app install."
+        },
+        "armorix.language": {
+          "type": "string",
+          "enum": [
+            "uz",
+            "ru",
+            "en"
+          ],
+          "default": "uz",
+          "description": "Language of messages (O'zbek / Русский / English)."
+        },
+        "armorix.scanOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scan a file every time it is saved."
+        },
+        "armorix.scanOnOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scan a file when it is opened."
+        },
+        "armorix.minSeverity": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "default": "low",
+          "description": "Hide findings below this severity."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node test/run.js",
+    "package": "vsce package --no-dependencies --allow-missing-repository"
+  },
+  "type": "commonjs",
+  "devDependencies": {
+    "@vscode/test-electron": "^3.1.0"
+  }
+}

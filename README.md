@@ -58,6 +58,11 @@ loopback endpoint; a remote model URL is refused unless `ARMORIX_ALLOW_REMOTE_AI
 | ARX-TLS | CWE-295 | `rejectUnauthorized: false`, `NODE_TLS_REJECT_UNAUTHORIZED=0`, `verify=False` |
 | ARX-DEBUG | CWE-489 | Flask `app.run(debug=True)`, Django `DEBUG = True` |
 | ARX-WEAKHASH | CWE-328 | MD5 / SHA-1 |
+| ARX-C-BOF | CWE-120/787 | C/C++: strcpy/strcat/sprintf/scanf("%s") into fixed buffers, oversized memcpy/memset, `gets` (CWE-242) |
+| ARX-C-UAF | CWE-416/415 | C/C++: use after free/delete, double free (branch- and #ifdef-aware) |
+| ARX-C-FMT | CWE-134 | C/C++: attacker-controlled printf-family format strings |
+| ARX-C-INTOVF | CWE-190 | C/C++: unchecked multiplication in malloc/realloc sizes |
+| ARX-C-CMDI | CWE-78 | C/C++: system()/popen() with input |
 | ARX-DEP | CWE-1395 | dependency versions with known CVEs (OSV / GHSA), known-malicious packages |
 
 ## Development
@@ -82,6 +87,12 @@ The AI engine is bundled (llama.cpp `llama-server`, ~40 MB); on first launch the
 the 1.1 GB model (or import a `.gguf` from a USB stick). An already-running Ollama is used automatically.
 
 Releases for Linux, Windows and macOS are built by `.github/workflows/release.yml` when a `v*` tag is pushed.
+
+## VS Code extension
+
+`vscode/` — diagnostics on save (with taint trace and CWE links) and a **Fix with local AI** quick fix that previews
+the verified patch before applying it. Uses the desktop app's engine automatically, or `armorix.path`.
+Install: `code --install-extension Armorix-vscode.vsix` (attached to every release).
 
 ## Deep scan
 
