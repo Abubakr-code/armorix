@@ -181,7 +181,7 @@ def _run(job: Job) -> None:
             job.result = runtime.setup(job.progress)
         elif job.kind == "db-update":
             job.progress("download", 0, 0, "OSV")
-            osv.update(log=lambda m: job.progress("download", 0, 0, m))
+            osv.update(from_dir=p.get("from_dir") or None, log=lambda m: job.progress("download", 0, 0, m))
             job.result = osv.OsvDb().info()
         job.status = "cancelled" if job.cancelled() else "done"
     except Exception as exc:  # surfaced to the UI, never crashes the server
@@ -236,7 +236,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/status":
             info = osv.OsvDb().info()
-            return self._send(200, {"version": __version__, "ai": runtime.status(), "db": info, "lang": i18n.detect()})
+            return self._send(200, {"version": __version__, "ai": runtime.status(), "db": info, "lang": i18n.detect(),
+                                    "data_dir": str(osv.data_dir()), "rules": len(ALL_RULES) + 1})
         m = re.fullmatch(r"/jobs/(\w+)", path)
         if m and m.group(1) in JOBS:
             return self._send(200, JOBS[m.group(1)].view())
@@ -319,6 +320,10 @@ class Handler(BaseHTTPRequestHandler):
             if not cfg.exists() and not (root / ".armorix.toml").exists():
                 cfg.write_text('[scan]\nbaseline = "armorix-baseline.json"\n', encoding="utf-8")
             return self._send(200, {"ok": True, "count": n, "path": str(target)})
+        if path == "/cache/clear":
+            from .cache import ResultCache
+            ResultCache().clear()
+            return self._send(200, {"ok": True})
         if path == "/projects/forget":
             return self._send(200, {"removed": history.forget(str(body.get("root", "")))})
         m = re.fullmatch(r"/jobs/(\w+)/cancel", path)

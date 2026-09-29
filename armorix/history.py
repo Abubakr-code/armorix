@@ -6,6 +6,7 @@ Stored in the data dir as SQLite; findings are kept as plain dicts with their fi
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import threading
 import time
@@ -16,7 +17,7 @@ from .deps.osv import data_dir
 from .finding import Finding, Severity
 from .scanner import ScanResult, severity_counts
 
-WEIGHTS = {"critical": 25, "high": 10, "medium": 3, "low": 1}
+WEIGHTS = {"critical": 40, "high": 12, "medium": 3, "low": 1}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS scans (
   id TEXT PRIMARY KEY, root TEXT, kind TEXT, started REAL, seconds REAL, files INTEGER, lines INTEGER,
@@ -28,8 +29,10 @@ _lock = threading.Lock()
 
 
 def score(counts: dict[str, int]) -> int:
-    """100 = nothing found. Each open finding costs points by severity; one critical alone drops below 80."""
-    return max(0, 100 - sum(WEIGHTS[k] * counts.get(k, 0) for k in WEIGHTS))
+    """100 = nothing found. Findings cost points by severity with diminishing returns, so the score still moves
+    on large projects: one high → 82 (B), one critical → 51 (D), a few criticals → F."""
+    penalty = sum(WEIGHTS[k] * counts.get(k, 0) for k in WEIGHTS)
+    return round(100 * math.exp(-penalty / 60))
 
 
 def grade(value: int) -> str:

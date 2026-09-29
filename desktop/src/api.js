@@ -2,11 +2,23 @@
 let base = "";
 let token = "";
 
-export async function connect() {
-  const info = await window.armorix.engine();
-  base = `http://127.0.0.1:${info.port}`;
-  token = info.token;
-  return info;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Waits until the engine has started (the window opens before it is ready). */
+export async function connect(onError) {
+  for (;;) {
+    const info = await window.armorix.engine();
+    if (info?.port) {
+      base = `http://127.0.0.1:${info.port}`;
+      token = info.token;
+      return info;
+    }
+    if (info?.error) {
+      onError?.(info.error);
+      throw new Error(info.error);
+    }
+    await sleep(250);
+  }
 }
 
 async function call(method, path, body) {
@@ -15,10 +27,12 @@ async function call(method, path, body) {
     headers: { "X-Armorix-Token": token, "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
+
+const q = encodeURIComponent;
 
 export const api = {
   status: () => call("GET", "/status"),
@@ -28,14 +42,23 @@ export const api = {
   cancel: (id) => call("POST", `/jobs/${id}/cancel`),
   apply: (id, patches) => call("POST", `/jobs/${id}/apply`, { patches }),
   importModel: (file) => call("POST", "/ai/import", { file }),
-  reportUrl: (id) => `${base}/report/${id}.html?token=${encodeURIComponent(token)}`,
+  projects: () => call("GET", "/projects"),
+  history: (root) => call("GET", `/history?root=${q(root)}`),
+  scan: (id, lang) => call("GET", `/scans/${id}?lang=${lang}`),
+  rules: (lang) => call("GET", `/rules?lang=${lang}`),
+  file: (path) => call("GET", `/file?path=${q(path)}`),
+  suppress: (path, line, rule) => call("POST", "/suppress", { path, line, rule }),
+  baseline: (root) => call("POST", "/baseline", { root }),
+  forget: (root) => call("POST", "/projects/forget", { root }),
+  clearCache: () => call("POST", "/cache/clear"),
+  reportUrl: (id, format = "html", lang = "en") => `${base}/report/${id}.${format}?token=${q(token)}&lang=${lang}`,
 };
 
-export async function waitFor(id, onUpdate) {
+export async function waitFor(id, onUpdate, interval = 300) {
   for (;;) {
     const view = await api.job(id);
-    onUpdate(view);
+    onUpdate?.(view);
     if (view.status !== "running") return view;
-    await new Promise((r) => setTimeout(r, 400));
+    await sleep(interval);
   }
 }
