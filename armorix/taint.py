@@ -94,16 +94,31 @@ class Var(str):
 
 
 class Analyzer:
+    # Per-language knobs; polyglot.PolyAnalyzer overrides them for PHP / Go / Java.
+    name_types = NAME_TYPES
+    call_types = {"call", "call_expression"}
+    function_types = FUNCTION_TYPES
+    return_types = RETURNS
+    declares = DECLARES
+    self_receivers = {"", "this", "self", "cls"}
+    source_types = SOURCE_TYPES
+
     def __init__(self, src: SourceFile):
         self.src = src
         self.family = src.family
-        self.source_re = JS_SOURCE if self.family == "js" else PY_SOURCE
-        self.assign_types = ASSIGN.get(self.family, {})
+        self.source_re = self.source_pattern()
+        self.assign_types = self.assignment_fields()
         self.tainted: dict[tuple, Origin] = {}
         self.dynamic: dict[tuple, Node] = {}
         self._scopes: dict[int, tuple] = {}
         self.functions = self._index_functions()
         self._propagate()
+
+    def source_pattern(self) -> re.Pattern:
+        return JS_SOURCE if self.family == "js" else PY_SOURCE
+
+    def assignment_fields(self) -> dict:
+        return ASSIGN.get(self.family, {})
 
     # ── scopes ──────────────────────────────────────────────────
     def scopes(self, node: Node) -> tuple:
@@ -114,7 +129,7 @@ class Analyzer:
         chain = []
         cur = node.parent
         while cur is not None:
-            if cur.type in FUNCTION_TYPES:
+            if cur.type in self.function_types:
                 chain.append(cur.id)
             cur = cur.parent
         chain.append(0)
@@ -137,7 +152,7 @@ class Analyzer:
 
     # ── sources & taint ─────────────────────────────────────────
     def is_source(self, node: Node) -> bool:
-        if node.type not in SOURCE_TYPES:
+        if node.type not in self.source_types:
             return False
         return bool(self.source_re.match(text(node)))
 
@@ -151,7 +166,7 @@ class Analyzer:
         return "", text(fn)
 
     def _safe_cast(self, node: Node) -> bool:
-        if node.type not in {"call", "call_expression"}:
+        if node.type not in self.call_types:
             return False
         obj, name = self._callee_name(node)
         return name in SAFE_CASTS or f"{obj}.{name}" in SAFE_CASTS
@@ -167,16 +182,24 @@ class Analyzer:
                 continue
             if self.is_source(n):
                 return text(n)
-            if n.type in {"call", "call_expression"}:
+            if n.type in self.call_types:
                 ret = self._return_key(n)
                 if ret:
                     return Var(text(n), ret)
-            if n.type == "identifier":
+            if n.type in self.name_types and n.type != "shorthand_property_identifier_pattern":
                 key = self._lookup(self.tainted, text(n), n)
                 if key:
                     return Var(text(n), key)
             if n.type in {"lambda", "arrow_function", "function_expression"} and n is not node:
                 continue  # a callback's body is not the value itself
+            if n.type in {"ternary_expression", "conditional_expression"}:
+                # `cond ? a : b` — the value is a or b; the condition only decides which
+                cond = n.child_by_field_name("condition")
+                named = n.named_children
+                if cond is None and self.family == "py" and len(named) == 3:
+                    cond = named[1]
+                stack.extend(reversed([c for c in named if cond is None or c.id != cond.id]))
+                continue
             if n.type in {"subscript_expression", "subscript"}:
                 # users[req.params.id] is server data picked by an untrusted key, not the key itself
                 obj = n.child_by_field_name("object") or n.child_by_field_name("value")
@@ -204,7 +227,7 @@ class Analyzer:
         t = node.type
         if t in {"string", "template_string", "concatenated_string"}:
             return not self.is_literal(node)
-        if t == "identifier":
+        if t in self.name_types:
             return self._lookup(self.dynamic, text(node), node) is not None
         if t in {"parenthesized_expression", "await_expression", "await"}:
             return any(self.is_dynamic_string(c) for c in node.named_children)
@@ -230,7 +253,7 @@ class Analyzer:
 
     def string_value(self, node: Node | None) -> str:
         """Best-effort text of a string expression, following one variable hop."""
-        if node is not None and node.type == "identifier":
+        if node is not None and node.type in self.name_types:
             key = self._lookup(self.dynamic, text(node), node)
             if key:
                 return text(self.dynamic[key])
@@ -265,19 +288,19 @@ class Analyzer:
         for p in box.named_children:
             if p.type == "comment":
                 continue
-            if p.type in {"identifier", "shorthand_property_identifier_pattern"}:
+            if p.type in self.name_types:
                 out.append([(text(p), p)])
                 continue
             target = (p.child_by_field_name("pattern") or p.child_by_field_name("name")
-                      or p.child_by_field_name("left") or next((c for c in p.named_children if c.type == "identifier"), None) or p)
-            names = [(text(n), p) for n in walk(target) if n.type in NAME_TYPES]
-            out.append(names[:1] if target.type == "identifier" else names)
+                      or p.child_by_field_name("left") or next((c for c in p.named_children if c.type in self.name_types), None) or p)
+            names = [(text(n), p) for n in walk(target) if n.type in self.name_types]
+            out.append(names[:1] if target.type in self.name_types else names)
         return out
 
     def _index_functions(self) -> dict[str, list[Node]]:
         found: dict[str, list[Node]] = {}
         for node in self.src.nodes:
-            if node.type in FUNCTION_TYPES:
+            if node.type in self.function_types:
                 name = self._function_name(node)
                 if name:
                     found.setdefault(name, []).append(node)
@@ -291,7 +314,7 @@ class Analyzer:
 
     def _return_key(self, call: Node) -> tuple | None:
         obj, name = self._callee_name(call)
-        if not name or obj not in {"", "this", "self", "cls"}:
+        if not name or obj not in self.self_receivers:
             return None
         key = ("ret", name)
         return key if key in self.tainted else None
@@ -305,7 +328,7 @@ class Analyzer:
             target, value = (node.child_by_field_name(f) for f in fields)
             if target is None or value is None:
                 continue
-            names = [(text(n), n) for n in walk(target) if n.type in NAME_TYPES]
+            names = [(text(n), n) for n in walk(target) if n.type in self.name_types]
             yield node, names, value
 
     def _taint(self, key: tuple, origin: Origin) -> bool:
@@ -391,20 +414,27 @@ class Analyzer:
                 if n.type in NAME_TYPES:
                     self._taint((fn.id, text(n)), Origin(line_of(p), self.src.line(line_of(p)), source=f"@{m.group(1)}() {text(n)}"))
 
+    def call_arguments(self, call: Node) -> tuple[list[Node], dict[str, Node]]:
+        """(positional, keyword) argument nodes of a call."""
+        box = call.child_by_field_name("arguments")
+        if box is None:
+            return [], {}
+        positional = [a for a in box.named_children if a.type not in {"comment", "keyword_argument"}]
+        keywords = {text(a.child_by_field_name("name")): a.child_by_field_name("value")
+                    for a in box.named_children if a.type == "keyword_argument"}
+        return positional, keywords
+
     def _call_sites(self) -> bool:
         """`helper(req.query.x)` → the helper's parameter is tainted inside the helper."""
         changed = False
         for call in self.src.call_nodes:
             obj, name = self._callee_name(call)
             fns = self.functions.get(name)
-            if not fns or obj not in {"", "this", "self", "cls"}:
+            if not fns or obj not in self.self_receivers:
                 continue
-            box = call.child_by_field_name("arguments")
-            if box is None:
+            positional, keywords = self.call_arguments(call)
+            if not positional and not keywords:
                 continue
-            positional = [a for a in box.named_children if a.type not in {"comment", "keyword_argument"}]
-            keywords = {text(a.child_by_field_name("name")): a.child_by_field_name("value")
-                        for a in box.named_children if a.type == "keyword_argument"}
             for fn in fns:
                 params = self._params(fn)
                 if obj in {"self", "cls"} or (self.family == "py" and self._is_method(fn) and params and params[0] and params[0][0][0] in {"self", "cls"}):
@@ -440,7 +470,7 @@ class Analyzer:
                 if fn.type in {"arrow_function", "lambda"} and body.type != "statement_block":
                     values.append(body)
                 for n in walk(body):
-                    if n.type in RETURNS and n.named_children and self.scopes(n)[0] == fn.id:
+                    if n.type in self.return_types and n.named_children and self.scopes(n)[0] == fn.id:
                         values.append(n.named_children[0])
                 for value in values:
                     via = self.tainted_by(value)
@@ -459,7 +489,7 @@ class Analyzer:
             for node, names, value in assignments:
                 via = self.tainted_by(value)
                 dynamic = self.is_dynamic_string(value)
-                declares = node.type in DECLARES
+                declares = node.type in self.declares
                 for name, name_node in names:
                     key = self._target_key(name, name_node, declares)
                     if via and not (isinstance(via, Var) and via.key == key):

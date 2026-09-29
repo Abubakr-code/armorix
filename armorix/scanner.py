@@ -6,6 +6,7 @@ Big projects are analysed in parallel worker processes; unchanged files come fro
 from __future__ import annotations
 
 import os
+import re
 import time
 from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
@@ -21,6 +22,8 @@ from .finding import Finding, Severity
 from .parsing import GRAMMARS, load
 from .project import ProjectConfig, assign_fingerprints, file_ignored, load_config, read_baseline, suppressed
 from .rules import ALL_RULES, TEXT_FILES
+from . import polyglot
+from .polyglot import POLY_FAMILIES, PolyAnalyzer
 from .taint import TAINT_FAMILIES, Analyzer
 
 SKIP_DIRS = {
@@ -88,9 +91,10 @@ def analyze_file(path: Path, rel: str, disabled: frozenset[str] = frozenset()) -
     """Everything the scanner needs from one file, as plain data (runs in worker processes)."""
     src = load(path, rel)
     out = {"lines": len(src.lines), "family": src.family if src.grammar else None, "findings": [], "suppressed": 0}
-    if file_ignored(src.lines):
+    if file_ignored(src.lines) or vendored(src):
         return out
-    taint = Analyzer(src) if src.tree is not None and src.family in TAINT_FAMILIES else None
+    poly = src.tree is not None and src.family in POLY_FAMILIES
+    taint = (PolyAnalyzer(src) if poly else Analyzer(src)) if src.tree is not None and (poly or src.family in TAINT_FAMILIES) else None
     seen = set()
     for rule in ALL_RULES:
         if rule.id in disabled or ("*" not in rule.families and src.family not in rule.families):
@@ -105,7 +109,39 @@ def analyze_file(path: Path, rel: str, disabled: frozenset[str] = frozenset()) -
                 out["suppressed"] += 1
                 continue
             out["findings"].append(f.to_dict())
+    if poly:  # PHP / Go / Java: one table-driven pass over the language's sinks
+        for f in polyglot.check(src, taint, disabled):
+            if f.key in seen:
+                continue
+            seen.add(f.key)
+            if suppressed(f, src.lines):
+                out["suppressed"] += 1
+                continue
+            out["findings"].append(f.to_dict())
     return out
+
+
+VENDOR_BANNER = re.compile(r"@license|\(c\)\s*(?:19|20)\d\d|Copyright|Released under the MIT|jQuery (?:JavaScript Library|v\d)|"
+                           r"\bLicensed under\b|SPDX-License-Identifier", re.IGNORECASE)
+VENDOR_NAMES = re.compile(r"(?:^|[/\\])(?:jquery[\w.-]*|moxie|plupload[\w.-]*|tinymce[\w.-]*|codemirror[\w.-]*|lodash[\w.-]*|underscore[\w.-]*|"
+                          r"backbone[\w.-]*|bootstrap[\w.-]*|react(?:-dom)?\.\w+|vue\.\w+|angular[\w.-]*|d3[\w.-]*|chart[\w.-]*|"
+                          r"swfobject|mediaelement[\w.-]*|twemoji[\w.-]*|masonry[\w.-]*|imagesloaded[\w.-]*|hoverintent[\w.-]*)\.js$", re.IGNORECASE)
+
+
+VENDOR_DIRS = {"tinymce", "jquery", "plupload", "codemirror", "mediaelement", "swfupload", "thickbox", "jcrop", "imgareaselect", "crop",
+               "ckeditor", "froala", "fullcalendar", "select2", "datatables", "highlight", "prism", "ace", "monaco", "pdfjs", "mathjax"}
+
+
+def vendored(src) -> bool:
+    """A third-party JS library copied into the repo (jquery.js, tinymce …): its own project audits it, and it is noise here."""
+    if src.family != "js":
+        return False
+    if VENDOR_NAMES.search(src.rel) or any(p.lower() in VENDOR_DIRS for p in src.rel.split("/")[:-1]):
+        return True
+    if src.lines and (max(map(len, src.lines[:50])) > 3000 or len(src.text) / max(1, len(src.lines)) > 400):
+        return True  # minified / bundled output
+    head = src.text[:1500]
+    return len(src.lines) > 600 and bool(VENDOR_BANNER.search(head)) and not src.rel.startswith(("src/", "app/", "lib/", "server/"))
 
 
 def _analyze_batch(batch: list[tuple[str, str]], disabled: frozenset[str]) -> list[tuple[str, dict | None, str | None]]:

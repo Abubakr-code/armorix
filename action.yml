@@ -1,0 +1,57 @@
+name: Armorix code audit
+description: Offline static analysis — injections, XSS, leaked keys, vulnerable packages, CI and Docker mistakes — with inline PR annotations.
+author: Armorix
+branding:
+  icon: shield
+  color: blue
+inputs:
+  path:
+    description: Folder to scan
+    default: "."
+  fail-on:
+    description: "Fail the job at this severity or above: low | medium | high | critical | none"
+    default: high
+  baseline:
+    description: Baseline file with known findings to hide (optional)
+    default: ""
+  lang:
+    description: "Message language: en | uz | ru"
+    default: en
+  sarif:
+    description: Also write armorix.sarif (upload it with github/codeql-action/upload-sarif for the Security tab)
+    default: "false"
+  deps:
+    description: Download the OSV database and check dependencies for known CVEs
+    default: "true"
+  version:
+    description: Armorix release to use, e.g. v0.3.0
+    default: latest
+runs:
+  using: composite
+  steps:
+    - name: Install Armorix
+      shell: bash
+      env:
+        ARMORIX_VERSION: ${{ inputs.version }}
+        ARMORIX_NO_MODIFY_PATH: "1"
+      run: |
+        curl -fsSL https://abubakr-code.github.io/install.sh | sh
+        echo "$HOME/.armorix/bin" >> "$GITHUB_PATH"
+    - name: Vulnerability database
+      if: inputs.deps == 'true'
+      shell: bash
+      run: ~/.armorix/bin/armorix db update || echo "::warning::OSV database download failed — dependency checks skipped"
+    - name: Scan
+      shell: bash
+      env:
+        IN_PATH: ${{ inputs.path }}
+        IN_FAIL: ${{ inputs.fail-on }}
+        IN_BASELINE: ${{ inputs.baseline }}
+        IN_LANG: ${{ inputs.lang }}
+        IN_SARIF: ${{ inputs.sarif }}
+      run: |
+        args=(scan "$IN_PATH" --lang "$IN_LANG")
+        if [ -n "$IN_BASELINE" ]; then args+=(--baseline "$IN_BASELINE"); fi
+        ~/.armorix/bin/armorix "${args[@]}" --format markdown --fail-on none >> "$GITHUB_STEP_SUMMARY"
+        if [ "$IN_SARIF" = "true" ]; then ~/.armorix/bin/armorix "${args[@]}" --format sarif -o armorix.sarif --fail-on none; fi
+        ~/.armorix/bin/armorix "${args[@]}" --format github --fail-on "$IN_FAIL"

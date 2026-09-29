@@ -10,7 +10,7 @@ from . import __version__, i18n
 from .finding import Severity
 from .scanner import ScanResult
 
-FAMILY_NAMES = {"js": "JS/TS", "py": "Python"}
+FAMILY_NAMES = {"js": "JS/TS", "py": "Python", "c": "C/C++", "php": "PHP", "go": "Go", "java": "Java"}
 
 CSS = """
 :root{--paper:#f4f4f1;--card:#fff;--ink:#0d0d0f;--muted:#6f6f6a;--line:#dcdcd5;--accent:#2448ff;--code:#0d0d0f;--codeink:#e8e8e4;

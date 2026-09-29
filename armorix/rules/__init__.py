@@ -1,4 +1,4 @@
-from .appsec import (AutoescapeOff, CsrfExempt, HardcodedSigningKey, InsecureCookie, InsecurePermissions, InsecureRandom,
+from .appsec import (AutoescapeOff, CsrfExempt, FileInclusion, HardcodedSigningKey, InsecureCookie, InsecurePermissions, InsecureRandom,
                      MassAssignment, PrototypePollution, RegexInjection, TempFileRace, Xxe)
 from .code_exec import CodeInjection, CommandInjection
 from .infra import ActionsInjection, ActionsPwnRequest, ContainerPrivileged, DockerfileRisk, TerraformRisk
@@ -13,7 +13,7 @@ ALL_RULES = [
     ReflectedXss(), PathTraversal(), Ssrf(), OpenRedirect(), UnsafeDeserialization(),
     HardcodedSecret(), JwtNoVerify(), InsecureCors(), TlsVerifyDisabled(), DebugEnabled(), WeakHash(),
     MassAssignment(), PrototypePollution(), RegexInjection(), InsecureCookie(), InsecureRandom(), HardcodedSigningKey(), Xxe(),
-    AutoescapeOff(), CsrfExempt(), InsecurePermissions(), TempFileRace(),
+    AutoescapeOff(), CsrfExempt(), InsecurePermissions(), TempFileRace(), FileInclusion(),
     # C / C++
     BufferOverflow(), UseAfterFree(), FormatString(), AllocOverflow(), ShellCommandC(),
     # CI / containers / cloud

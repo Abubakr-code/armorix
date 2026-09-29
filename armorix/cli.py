@@ -171,6 +171,9 @@ def main(argv: list[str] | None = None) -> int:
     p_init.add_argument("path", nargs="?", default=".")
     p_init.add_argument("--ci", action="store_true", help="also write .github/workflows/armorix.yml")
 
+    p_update = sub.add_parser("update", help="update a standalone install to the latest release (checksum-verified)")
+    p_update.add_argument("--check", action="store_true", help="only report whether a newer version exists")
+
     p_rules = sub.add_parser("rules", help="list every rule with its CWE")
     p_rules.add_argument("--lang", choices=list(i18n.LANGS))
 
@@ -186,6 +189,15 @@ def main(argv: list[str] | None = None) -> int:
         return _init(ns)
     if ns.command == "rules":
         return _rules(ns)
+    if ns.command == "update":
+        from . import selfupdate
+
+        try:
+            print(selfupdate.check() if ns.check else selfupdate.update(lambda m: print(m, file=sys.stderr)))
+        except selfupdate.UpdateError as exc:
+            print(f"armorix: {exc}", file=sys.stderr)
+            return 1
+        return 0
     if ns.command == "fix":
         return _fix(ns)
     if ns.command == "hook":
@@ -449,6 +461,7 @@ include_tests = false
 """
 
 WORKFLOW_TEMPLATE = """# Armorix — offline code audit on every push and pull request.
+# Findings appear as annotations on the PR diff and in the job summary.
 name: armorix
 on:
   push:
@@ -463,12 +476,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Armorix
-        run: curl -fsSL https://abubakr-code.github.io/install.sh | sh
-      - name: Scan
-        run: |
-          ~/.armorix/bin/armorix scan . --format github --fail-on high
-          ~/.armorix/bin/armorix scan . --format markdown --fail-on none >> "$GITHUB_STEP_SUMMARY"
+      - uses: Abubakr-code/armorix@v0.3.0
+        with:
+          fail-on: high
+          # baseline: armorix-baseline.json
 """
 
 

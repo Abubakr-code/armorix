@@ -1,6 +1,7 @@
 """Builds desktop/vendor/{engine,llama} for the current OS — run before electron-builder.
 
-    python packaging/prepare.py            # engine (PyInstaller) + llama.cpp server
+    python packaging/prepare.py                 # engine (PyInstaller) + llama.cpp server
+    python packaging/prepare.py --engine-only   # just the engine (standalone CLI builds)
 Used locally and by .github/workflows/release.yml on Linux, macOS and Windows runners.
 """
 
@@ -48,7 +49,9 @@ def build_engine() -> None:
         "--name", "armorix", "--onedir", "--console", "--noconfirm", "--clean",
         "--distpath", str(VENDOR), "--workpath", str(work), "--specpath", str(work),
         "--collect-all", "tree_sitter_javascript", "--collect-all", "tree_sitter_typescript",
-        "--collect-all", "tree_sitter_python", "--collect-submodules", "rich", "--collect-submodules", "armorix",
+        "--collect-all", "tree_sitter_python", "--collect-all", "tree_sitter_c", "--collect-all", "tree_sitter_cpp",
+        "--collect-all", "tree_sitter_php", "--collect-all", "tree_sitter_go", "--collect-all", "tree_sitter_java",
+        "--collect-submodules", "rich", "--collect-submodules", "armorix",
     ]
     subprocess.run(cmd, check=True)
     shutil.rmtree(VENDOR / "engine", ignore_errors=True)
@@ -89,4 +92,5 @@ if __name__ == "__main__":
     VENDOR.mkdir(parents=True, exist_ok=True)
     if "--llama-only" not in sys.argv:
         build_engine()
-    fetch_llama()
+    if "--engine-only" not in sys.argv:
+        fetch_llama()

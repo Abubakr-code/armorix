@@ -65,7 +65,11 @@ class PrototypePollution(Rule):
         out = []
         for call in calls(src):
             obj, name = callee(call)
-            if name not in self.MERGES or (name in {"set", "extend"} and obj not in {"_", "lodash", "$", "jQuery", "dot", "objectPath"}):
+            if name not in self.MERGES:
+                continue
+            if obj in {"$", "jQuery"} and not (name == "extend" and args(call) and text(args(call)[0]) == "true"):
+                continue  # only a *deep* jQuery.extend(true, …) walks nested keys; $.merge concatenates arrays
+            if name in {"set", "setWith", "merge", "mergeWith"} and obj not in {"_", "lodash", "dot", "objectPath", "R", ""}:
                 continue
             via = next((v for v in (taint.tainted_by(x) for x in args(call)) if v), None)
             if via:
@@ -341,3 +345,16 @@ class TempFileRace(Rule):
         return [finding(self, src, call, Severity.LOW, "tempfile.mktemp() is race-prone — another process can create the file first.",
                         "Use tempfile.NamedTemporaryFile() or tempfile.mkstemp().")
                 for call in calls(src) if callee(call) == ("tempfile", "mktemp")]
+
+
+class FileInclusion(Rule):
+    """PHP include / require with a path from the request. The check itself lives in polyglot.py."""
+
+    id = "ARX-LFI"
+    cwe = "CWE-98"
+    title = "File inclusion (LFI / RFI)"
+    description = "include / require loads a file chosen by the user, so an attacker runs any PHP file or reads server files."
+    families = ("php",)
+
+    def check(self, src, taint):
+        return []

@@ -59,6 +59,8 @@ class ReflectedXss(CallSinkRule):
                 value = node
             if value is None or taint.is_literal(value) or any(s in text(value) for s in XSS_SANITIZERS):
                 continue
+            if value.type == "call_expression" and all(taint.is_literal(a) for a in args(value)):
+                continue  # __('Hide'), t('label') — translations of fixed strings
             if node.type == "jsx_attribute" and not any(n.type in {"identifier", "member_expression", "template_substitution"} for n in walk(value)):
                 continue
             via = taint.tainted_by(value)

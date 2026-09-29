@@ -1,5 +1,6 @@
-# Builds the desktop app for Linux, Windows and macOS and attaches the installers to a GitHub Release.
-# Trigger: push a tag like v0.1.0  (git tag v0.1.0 && git push origin v0.1.0) — or run it manually.
+# Builds everything a release ships and attaches it to a GitHub Release:
+#   desktop apps (AppImage, deb, exe, dmg) · standalone CLI archives · VS Code extension · Docker image · SHA256SUMS
+# Trigger: push a tag like v0.3.0 (git tag v0.3.0 && git push origin v0.3.0) — or run it manually (no release then).
 name: release
 
 on:
@@ -9,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   build:
@@ -16,12 +18,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04        # older glibc → the AppImage runs on most distros (Ubuntu 22.04+, Debian 12, Kali)
-            target: --linux AppImage deb
+          - os: ubuntu-22.04        # older glibc → runs on most distros (Ubuntu 22.04+, Debian 12, Kali)
+            desktop: --linux AppImage deb
           - os: windows-latest
-            target: --win nsis
+            desktop: --win nsis
           - os: macos-14            # Apple Silicon
-            target: --mac dmg
+            desktop: --mac dmg
+          - os: ubuntu-22.04-arm    # CLI only (Raspberry Pi 4/5, ARM servers)
+            desktop: ""
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -35,27 +39,47 @@ jobs:
           pip install -e ".[dev]" pyinstaller
           python -m pytest -q
 
-      - name: Engine — freeze with PyInstaller + fetch llama.cpp
-        run: python packaging/prepare.py
+      - name: Engine — freeze with PyInstaller (+ llama.cpp for the desktop app)
+        run: python packaging/prepare.py ${{ matrix.desktop == '' && '--engine-only' || '' }}
+
+      - name: Standalone CLI archive
+        run: python packaging/cli_archive.py
 
       - uses: actions/setup-node@v4
+        if: matrix.desktop != ''
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
       - name: Desktop — build installers
+        if: matrix.desktop != ''
         working-directory: desktop
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"   # unsigned builds for the MVP
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"   # unsigned builds
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npm ci
           npm run build
-          npx electron-builder ${{ matrix.target }} --publish never
+          npx electron-builder ${{ matrix.desktop }} --publish never
+
+      - name: Desktop — launch the packaged app and take screenshots
+        if: runner.os == 'Linux' && matrix.desktop != ''
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb > /dev/null
+          mkdir -p smoke
+          ARMORIX_SMOKE="$PWD/smoke" ARMORIX_SMOKE_FOLDER="$PWD/examples/vuln-shop" ARMORIX_SMOKE_VIEWS=rules,settings \
+            timeout 180 xvfb-run -a -s "-screen 0 1440x900x24" desktop/release/linux-unpacked/armorix-desktop --no-sandbox
+          ls smoke && test -f smoke/3-findings.png
+
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux' && matrix.desktop != ''
+        with:
+          name: smoke-screenshots
+          path: smoke/
 
       - name: VS Code extension (.vsix)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.desktop != ''
         working-directory: vscode
         run: npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository -o ../desktop/release/Armorix-vscode.vsix
 
@@ -68,16 +92,40 @@ jobs:
             desktop/release/Armorix-*.exe
             desktop/release/Armorix-*.dmg
             desktop/release/Armorix-*.vsix
+            desktop/release/armorix-cli-*
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test the image
+        run: |
+          docker build -t armorix:ci .
+          docker run --rm -v "$PWD/examples/vuln-shop:/src:ro" armorix:ci scan /src --fail-on none
+      - name: Push to GitHub Container Registry
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          image=ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          version="${GITHUB_REF_NAME#v}"
+          docker tag armorix:ci "$image:$version" && docker push "$image:$version"
+          docker tag armorix:ci "$image:latest" && docker push "$image:latest"
 
   release:
-    needs: build
+    needs: [build, docker]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: armorix-*
           merge-multiple: true
+      - name: Checksums and installers
+        run: |
+          cp install/install.sh install/install.ps1 dist/
+          cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*

@@ -360,6 +360,13 @@ RULES.update({
                "Отключите privileged и общие namespace хоста, не монтируйте /var/run/docker.sock, запускайте от непривилегированного пользователя с минимумом прав."),
         "en": ("Over-privileged container", "", ""),
     },
+    "ARX-LFI": {
+        "uz": ("Fayl ulash (LFI / RFI)", "include / require foydalanuvchi tanlagan faylni yuklayapti — hujumchi istalgan PHP faylni ishga tushiradi yoki serverdagi fayllarni o'qiydi.",
+               "Faqat ruxsat etilgan fayllarni ulang: foydalanuvchi tanlovini allow-list bilan xaritalang (['home' => 'home.php']), yo'lni yig'mang."),
+        "ru": ("Включение файла (LFI / RFI)", "include / require загружает файл, выбранный пользователем, — атакующий запускает любой PHP-файл или читает файлы сервера.",
+               "Подключайте только фиксированные файлы: сопоставьте выбор пользователя с allow-list (['home' => 'home.php']), не собирайте путь."),
+        "en": ("File inclusion (LFI / RFI)", "", ""),
+    },
     "ARX-TF": {
         "uz": ("Bulut resursi internetga ochiq", "Terraform bucket, ma'lumotlar bazasi yoki admin portni butun internetga ochyapti.",
                "Kirishni ma'lum CIDR / security group'lar bilan cheklang, bucket'larni yopiq, bazalarni xususiy subnet'da saqlang."),

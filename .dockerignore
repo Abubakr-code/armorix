@@ -1,0 +1,5 @@
+*
+!pyproject.toml
+!README.md
+!armorix/**
+**/__pycache__

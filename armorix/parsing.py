@@ -9,7 +9,10 @@ from typing import Iterator
 
 import tree_sitter_c as ts_c
 import tree_sitter_cpp as ts_cpp
+import tree_sitter_go as ts_go
+import tree_sitter_java as ts_java
 import tree_sitter_javascript as ts_javascript
+import tree_sitter_php as ts_php
 import tree_sitter_python as ts_python
 import tree_sitter_typescript as ts_typescript
 from tree_sitter import Language, Node, Parser, Tree
@@ -32,10 +35,14 @@ GRAMMARS = {
     ".cxx": "cpp",
     ".hpp": "cpp",
     ".hh": "cpp",
+    ".php": "php",
+    ".phtml": "php",
+    ".go": "go",
+    ".java": "java",
 }
 
 # grammar → rule family (JS and TS share node types for everything the rules touch)
-FAMILY = {"javascript": "js", "typescript": "js", "tsx": "js", "python": "py", "c": "c", "cpp": "c"}
+FAMILY = {"javascript": "js", "typescript": "js", "tsx": "js", "python": "py", "c": "c", "cpp": "c", "php": "php", "go": "go", "java": "java"}
 
 
 @lru_cache(maxsize=None)
@@ -47,8 +54,16 @@ def _language(grammar: str) -> Language:
         "python": ts_python.language,
         "c": ts_c.language,
         "cpp": ts_cpp.language,
+        "php": ts_php.language_php,
+        "go": ts_go.language,
+        "java": ts_java.language,
     }[grammar]()
     return Language(raw)
+
+
+CALL_TYPES = {"call_expression", "call", "new_expression",  # JS / Python / C / Go
+              "function_call_expression", "member_call_expression", "scoped_call_expression", "nullsafe_member_call_expression",  # PHP
+              "method_invocation", "object_creation_expression"}  # Java (+ PHP `new`)
 
 
 @lru_cache(maxsize=None)
@@ -72,7 +87,7 @@ class SourceFile:
 
     @cached_property
     def call_nodes(self) -> list[Node]:
-        return [n for n in self.nodes if n.type in {"call_expression", "call", "new_expression"}]
+        return [n for n in self.nodes if n.type in CALL_TYPES]
 
     @property
     def family(self) -> str | None:

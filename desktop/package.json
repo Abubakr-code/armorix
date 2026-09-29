@@ -1,7 +1,7 @@
 {
   "name": "armorix-desktop",
   "productName": "Armorix",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Offline AI code auditor for developers",
   "author": "Armorix",
   "homepage": "https://armorix.security",
@@ -61,7 +61,9 @@
         "libnss3",
         "libxss1",
         "libasound2 | libasound2t64"
-      ]
+      ],
+      "afterInstall": "build/linux/after-install.sh",
+      "afterRemove": "build/linux/after-remove.sh"
     },
     "win": {
       "target": "nsis"
