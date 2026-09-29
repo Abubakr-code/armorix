@@ -85,16 +85,49 @@ def _py(src: SourceFile):
     return defined, used
 
 
+PHP_GLOBALS = {"$this", "$_GET", "$_POST", "$_REQUEST", "$_COOKIE", "$_FILES", "$_SERVER", "$_SESSION", "$_ENV", "$GLOBALS", "$argv",
+               "$argc", "$http_response_header"}
+PHP_ASSIGN = {"assignment_expression", "augmented_assignment_expression", "reference_assignment_expression"}
+PHP_DECL_PARENTS = {"simple_parameter", "variadic_parameter", "property_promotion_parameter", "global_declaration", "static_variable_declaration",
+                    "catch_clause", "anonymous_function_use_clause", "static_variable_declaration"}
+
+
+def _php(src: SourceFile):
+    """PHP variables only: functions and methods come from extensions / frameworks and cannot be checked from one file."""
+    defined, used = set(), {}
+    for n in src.nodes:
+        if n.type != "variable_name":
+            continue
+        name = text(n)
+        declared = n.parent is not None and n.parent.type in PHP_DECL_PARENTS
+        cur = n
+        while not declared and cur.parent is not None and cur.parent.type not in {"expression_statement", "compound_statement", "program"}:
+            parent = cur.parent
+            if parent.type in PHP_ASSIGN and parent.child_by_field_name("left") is not None and \
+                    parent.child_by_field_name("left").start_byte <= n.start_byte < parent.child_by_field_name("left").end_byte:
+                declared = True
+            elif parent.type == "foreach_statement" and cur.id != parent.named_children[0].id:
+                declared = True
+            cur = parent
+        if declared:
+            defined.add(name)
+        else:
+            used.setdefault(name, n.start_point[0] + 1)
+    return defined, used
+
+
 def scope(src: SourceFile) -> tuple[set[str], dict[str, int]]:
     """(names defined anywhere in the file, first line each other name is used on).
 
-    C/C++ names mostly come from headers (strlen, snprintf …) that are not in the file,
-    so the invented-name guard is skipped there; parse + re-scan still verify the patch.
+    C/C++, PHP, Go and Java names mostly come from headers, packages and class libraries that are not in the
+    file, so the invented-name guard is skipped there; parse + re-scan still verify the patch.
     """
-    if src.family == "c":
+    if src.family == "php":
+        return _php(src)
+    if src.family in {"c", "go", "java"}:
         return set(), {}
     return _js(src) if src.family == "js" else _py(src)
 
 
 def globals_for(family: str) -> set[str]:
-    return JS_GLOBALS if family == "js" else PY_GLOBALS
+    return {"js": JS_GLOBALS, "php": PHP_GLOBALS}.get(family, PY_GLOBALS)

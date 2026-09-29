@@ -151,3 +151,16 @@ def test_languages_are_counted(tmp_path):
     (tmp_path / "b.go").write_text("package b")
     (tmp_path / "C.java").write_text("class C {}")
     assert dict(scan(tmp_path, deps=False).languages) == {"php": 1, "go": 1, "java": 1}
+
+
+def test_php_invented_variable_is_rejected(tmp_path):
+    from armorix.fixer import _verify
+
+    old = '<?php\nfunction f($conn) {\n  $id = $_GET["id"];\n  return mysqli_query($conn, "SELECT * FROM u WHERE id = " . $id);\n}\n'
+    new = ('<?php\nfunction f($conn) {\n  $id = $_GET["id"];\n  $stmt = $pdo->prepare("SELECT * FROM u WHERE id = ?");\n'
+           '  $stmt->execute([$id]);\n  return $stmt;\n}\n')
+    path = tmp_path / "a.php"
+    path.write_text(old)
+    finding = next(f for f in scan(tmp_path, deps=False).findings if f.rule_id == "ARX-SQLI")
+    ok, reason = _verify(path, finding, old, new, 4, 6)
+    assert not ok and "$pdo" in reason

@@ -359,7 +359,9 @@ IMPACT = {
     "ARX-LFI": ("chooses the file that is included and executed — local / remote file inclusion.", "a file is included from a non-constant path."),
 }
 FIXES = {
-    ("ARX-SQLI", "php"): "Use prepared statements: $stmt = $pdo->prepare('SELECT … WHERE id = ?'); $stmt->execute([$id]); (Laravel: DB::select('… = ?', [$id])).",
+    ("ARX-SQLI", "php"): "Use a prepared statement with the driver the code already uses: mysqli_prepare($conn, '… WHERE id = ?') + "
+                         "mysqli_stmt_bind_param() / mysqli_stmt_execute(); with PDO $pdo->prepare('… = ?')->execute([$id]); "
+                         "Laravel: DB::select('… = ?', [$id]).",
     ("ARX-SQLI", "go"): 'Pass values as arguments: db.Query("SELECT … WHERE id = $1", id) — never fmt.Sprintf or + into SQL.',
     ("ARX-SQLI", "java"): 'Use PreparedStatement with ? placeholders (or JPA :named parameters): ps = conn.prepareStatement("… WHERE id = ?"); ps.setString(1, id).',
     ("ARX-CMDI", "php"): "Avoid the shell: validate against an allow-list and wrap every value in escapeshellarg().",

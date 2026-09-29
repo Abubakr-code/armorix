@@ -1,8 +1,8 @@
 {
   "name": "armorix",
-  "displayName": "Armorix — offline AI code auditor",
-  "description": "Finds SQL injection, XSS, secrets, memory bugs (C/C++) and vulnerable dependencies as you code — and fixes them with a local AI. Your code never leaves the machine.",
-  "version": "0.2.0",
+  "displayName": "Armorix \u2014 offline AI code auditor",
+  "description": "Finds SQL injection, XSS, secrets, memory bugs (C/C++) and vulnerable dependencies as you code \u2014 and fixes them with a local AI. Your code never leaves the machine.",
+  "version": "0.3.0",
   "publisher": "armorix",
   "license": "SEE LICENSE IN README.md",
   "icon": "media/icon.png",
@@ -30,13 +30,16 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onLanguage:javascript",
-    "onLanguage:javascriptreact",
-    "onLanguage:typescript",
-    "onLanguage:typescriptreact",
-    "onLanguage:python",
     "onLanguage:c",
     "onLanguage:cpp",
+    "onLanguage:go",
+    "onLanguage:java",
+    "onLanguage:javascript",
+    "onLanguage:javascriptreact",
+    "onLanguage:php",
+    "onLanguage:python",
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact",
     "workspaceContains:**/package-lock.json",
     "workspaceContains:**/requirements.txt"
   ],
@@ -91,7 +94,7 @@
             "en"
           ],
           "default": "uz",
-          "description": "Language of messages (O'zbek / Русский / English)."
+          "description": "Language of messages (O'zbek / \u0420\u0443\u0441\u0441\u043a\u0438\u0439 / English)."
         },
         "armorix.scanOnSave": {
           "type": "boolean",

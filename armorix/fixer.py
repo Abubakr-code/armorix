@@ -25,9 +25,12 @@ from .scanner import scan
 FUNCTIONS = {
     "function_declaration", "function_expression", "arrow_function", "method_definition", "generator_function_declaration",
     "function_definition", "decorated_definition",
+    "method_declaration", "func_literal", "constructor_declaration", "anonymous_function",  # PHP / Go / Java
 }
 MAX_WINDOW = 40
-LANG = {"javascript": "javascript", "typescript": "typescript", "tsx": "tsx", "python": "python", "c": "c", "cpp": "cpp"}
+LANG = {"javascript": "javascript", "typescript": "typescript", "tsx": "tsx", "python": "python", "c": "c", "cpp": "cpp",
+        "php": "php", "go": "go", "java": "java"}
+PATCH_FAMILY = {"python": "py", "c": "c", "cpp": "c", "php": "php", "go": "go", "java": "java"}  # everything else: "js"
 FENCE = re.compile(r"```[\w+-]*\n(.*?)```", re.DOTALL)
 
 
@@ -119,7 +122,12 @@ IMPORT = {
     "py": re.compile(r"^\s*(?:import\s+[\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*|from\s+[\w.]+\s+import\s+.+)\s*$"),
     "js": re.compile(r"^\s*(?:(?:const|let|var)\s+[\w${}\s,:]+=\s*require\([^)]*\);?|import\s+.+\s+from\s+['\"][^'\"]+['\"];?)\s*$"),
     "c": re.compile(r"^\s*#\s*include\s*[<\"][^>\"]+[>\"]\s*$"),
+    "php": re.compile(r"^\s*use\s+[\\\w]+(?:\s+as\s+\w+)?\s*;\s*$"),
+    "go": re.compile(r"^\s*import\s+(?:[\w.]+\s+)?\"[^\"]+\"\s*$"),
+    "java": re.compile(r"^\s*import\s+(?:static\s+)?[\w.]+(?:\.\*)?\s*;\s*$"),
 }
+# Where new imports may go when a file has none yet: after these lines.
+PREAMBLE = {"php": re.compile(r"^\s*(?:<\?php\b|namespace\s)"), "go": re.compile(r"^\s*package\s+\w+"), "java": re.compile(r"^\s*package\s+[\w.]+\s*;")}
 
 
 def _split_imports(body: str, family: str) -> tuple[list[str], str]:
@@ -140,9 +148,18 @@ def _hoist(lines: list[str], imports: list[str], family: str) -> tuple[list[str]
     if not new:
         return lines, 0
     last = 0
-    for i, ln in enumerate(lines[:60]):
+    in_block = False
+    for i, ln in enumerate(lines[:200]):
+        if family == "go" and re.match(r"^\s*import\s*\($", ln):
+            in_block = True
+        if in_block:
+            if ln.strip() == ")":
+                in_block, last = False, i + 1
+            continue
         if IMPORT[family].match(ln):
             last = i + 1
+    if not last and family in PREAMBLE:
+        last = max((i + 1 for i, ln in enumerate(lines[:60]) if PREAMBLE[family].match(ln)), default=0)
     return lines[:last] + new + lines[last:], len(new)
 
 
@@ -161,7 +178,7 @@ def propose(ai: LocalAI, root: Path, finding: Finding, attempts: int = 2) -> Pat
     original = "".join(lines[start - 1:end])
     indent = re.match(r"[ \t]*", lines[start - 1]).group(0)
 
-    family = {"python": "py", "c": "c", "cpp": "c"}.get(grammar, "js")
+    family = PATCH_FAMILY.get(grammar, "js")
     feedback, fixed, diff, verified, reason = "", "", "", False, "model returned no code"
     shift = 0
     for _ in range(attempts):
@@ -280,7 +297,6 @@ def apply(root: Path, patches: list[Patch]) -> list[Patch]:
             imports += [i for i in p.imports if i not in imports]
             applied.append(p)
         if imports:
-            family = "py" if path.suffix == ".py" else "c" if path.suffix in {".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"} else "js"
-            lines, _ = _hoist(lines, imports, family)
+            lines, _ = _hoist(lines, imports, PATCH_FAMILY.get(GRAMMARS.get(path.suffix.lower(), ""), "js"))
         path.write_text("".join(lines), encoding="utf-8")
     return applied

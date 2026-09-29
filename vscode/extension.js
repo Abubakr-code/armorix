@@ -6,7 +6,8 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const LANGS = new Set(["javascript", "javascriptreact", "typescript", "typescriptreact", "python", "c", "cpp"]);
+const LANGS = new Set(["javascript", "javascriptreact", "typescript", "typescriptreact", "python", "c", "cpp", "php", "go", "java",
+  "dockerfile", "yaml", "github-actions-workflow", "terraform"]);
 const RANK = { low: 1, medium: 2, high: 3, critical: 4 };
 const UI = {
   uz: { fix: "Armorix: AI bilan tuzatish", fixing: "Armorix: lokal AI patch yozmoqda…", scanning: "Armorix tekshirmoqda…", verified: "✓ Patch qayta tekshirildi. Qo'llaysizmi?", apply: "Qo'llash", cancel: "Bekor qilish", rejected: "Patch rad etildi", notFound: "Armorix topilmadi. Desktop ilovani o'rnating yoki sozlamalarda armorix.path ni ko'rsating.", issues: "muammo", clean: "muammo yo'q", manba: "manba", diffTitle: "Armorix patch (✓ tekshirildi)" },
@@ -25,6 +26,9 @@ function candidates() {
   const exe = process.platform === "win32" ? "armorix.exe" : "armorix";
   const list = own ? [own] : [];
   list.push("armorix");
+  // Standalone CLI from install.sh / install.ps1
+  if (process.platform === "win32") list.push(path.join(process.env.LOCALAPPDATA || "", "Armorix", "cli", "armorix", exe));
+  else list.push(path.join(os.homedir(), ".armorix", "bin", "armorix"));
   if (process.platform === "linux") list.push("/opt/Armorix/resources/engine/armorix");
   if (process.platform === "darwin") list.push("/Applications/Armorix.app/Contents/Resources/engine/armorix");
   if (process.platform === "win32") list.push(path.join(process.env.LOCALAPPDATA || "", "Programs", "Armorix", "resources", "engine", exe));
