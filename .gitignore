@@ -3,7 +3,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 armorix-report.*
-build/
+/build/
 *.spec
 vscode/node_modules/
 vscode/.vscode-test/
