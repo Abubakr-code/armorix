@@ -51,7 +51,6 @@
         "deb"
       ],
       "category": "Development",
-      "icon": "build/icon.png",
       "synopsis": "Offline AI code auditor",
       "maintainer": "Armorix <hello@armorix.security>",
       "syncDesktopName": true
@@ -65,8 +64,7 @@
       ]
     },
     "win": {
-      "target": "nsis",
-      "icon": "build/icon.png"
+      "target": "nsis"
     },
     "nsis": {
       "oneClick": false,
@@ -74,10 +72,11 @@
     },
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.developer-tools",
-      "icon": "build/icon.png"
+      "category": "public.app-category.developer-tools"
     },
-    "artifactName": "Armorix-${os}-${arch}.${ext}"
+    "artifactName": "Armorix-${os}-${arch}.${ext}",
+    "publish": null,
+    "icon": "build/icon.png"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.7.0",
@@ -92,5 +91,9 @@
   "allowScripts": {
     "esbuild@0.25.12": true
   },
-  "desktopName": "armorix.desktop"
+  "desktopName": "armorix.desktop",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Abubakr-code/armorix.git"
+  }
 }
