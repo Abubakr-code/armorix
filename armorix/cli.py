@@ -89,7 +89,17 @@ def to_json(result: ScanResult) -> str:
     )
 
 
+def _utf8_streams() -> None:
+    """Windows consoles and pipes default to a legacy code page; ✓ / Cyrillic / Uzbek text would crash."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_streams()
     parser = argparse.ArgumentParser(prog="armorix", description="Offline, AST-based vulnerability scanner.")
     parser.add_argument("--version", action="version", version=f"armorix {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
