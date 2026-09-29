@@ -7,6 +7,8 @@ from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import Iterator
 
+import tree_sitter_c as ts_c
+import tree_sitter_cpp as ts_cpp
 import tree_sitter_javascript as ts_javascript
 import tree_sitter_python as ts_python
 import tree_sitter_typescript as ts_typescript
@@ -23,10 +25,17 @@ GRAMMARS = {
     ".cts": "typescript",
     ".tsx": "tsx",
     ".py": "python",
+    ".c": "c",
+    ".h": "cpp",  # headers are usually shared with C++; the C++ grammar parses plain C too
+    ".cc": "cpp",
+    ".cpp": "cpp",
+    ".cxx": "cpp",
+    ".hpp": "cpp",
+    ".hh": "cpp",
 }
 
 # grammar → rule family (JS and TS share node types for everything the rules touch)
-FAMILY = {"javascript": "js", "typescript": "js", "tsx": "js", "python": "py"}
+FAMILY = {"javascript": "js", "typescript": "js", "tsx": "js", "python": "py", "c": "c", "cpp": "c"}
 
 
 @lru_cache(maxsize=None)
@@ -36,6 +45,8 @@ def _language(grammar: str) -> Language:
         "typescript": ts_typescript.language_typescript,
         "tsx": ts_typescript.language_tsx,
         "python": ts_python.language,
+        "c": ts_c.language,
+        "cpp": ts_cpp.language,
     }[grammar]()
     return Language(raw)
 

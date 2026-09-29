@@ -242,6 +242,19 @@ def _fix(ns) -> int:
             console.print(f"[dim]{t('dry')}[/]")
         return 0
     applied = fixer.apply(root, patches)
+    # Patches that overlapped an applied one (same function) are re-proposed on the updated file.
+    leftover = {(p.finding.rule_id, p.finding.file) for p in ok if p not in applied}
+    if leftover:
+        again = [f for f in scan(root, deps=False).findings if (f.rule_id, f.file) in leftover]
+        second = []
+        for f in again:
+            with console.status(f"[dim]{t('writing')}[/]", spinner="dots"):
+                patch = fixer.propose(ai, root, f)
+            if patch is not None and patch.verified:
+                second.append(patch)
+                if patch.diff:
+                    _print_diff(console, patch.diff)
+        applied += fixer.apply(root, second)
     after = scan(root, deps=False)
     console.print(f"[green]{t('applied', n=len(applied))}[/] · [bold]{len(before.findings)} → {len(after.findings)}[/]")
     return 0

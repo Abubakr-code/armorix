@@ -86,7 +86,13 @@ def _py(src: SourceFile):
 
 
 def scope(src: SourceFile) -> tuple[set[str], dict[str, int]]:
-    """(names defined anywhere in the file, first line each other name is used on)."""
+    """(names defined anywhere in the file, first line each other name is used on).
+
+    C/C++ names mostly come from headers (strlen, snprintf …) that are not in the file,
+    so the invented-name guard is skipped there; parse + re-scan still verify the patch.
+    """
+    if src.family == "c":
+        return set(), {}
     return _js(src) if src.family == "js" else _py(src)
 
 

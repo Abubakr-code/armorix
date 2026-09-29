@@ -94,4 +94,5 @@ def test_demo_project():
     assert sorted(f.rule_id for f in result.findings) == sorted(
         ["ARX-SQLI"] * 2 + ["ARX-CMDI"] * 2 + ["ARX-EVAL"] * 2 + ["ARX-SECRET"] * 3
         + ["ARX-XSS"] * 2 + ["ARX-PATH", "ARX-SSRF", "ARX-SSRF", "ARX-NOSQL", "ARX-JWT", "ARX-DEBUG"]
+        + ["ARX-C-BOF", "ARX-C-FMT", "ARX-C-UAF"]
     )

@@ -88,7 +88,7 @@ def scan(target: str | Path, deps: bool = True, db: OsvDb | None = None, progres
         result.lines += len(src.lines)
         if src.grammar:
             result.languages[src.family] += 1
-        taint = Analyzer(src) if src.tree is not None else None
+        taint = Analyzer(src) if src.tree is not None and src.family in {"js", "py"} else None
         for rule in ALL_RULES:
             if "*" not in rule.families and src.family not in rule.families:
                 continue

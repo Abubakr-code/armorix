@@ -199,6 +199,60 @@ for _kind, ((uz_t, uz_w), (ru_t, ru_w)) in _AI.items():
     RULES[f"ARX-AI-{_kind}"] = {"uz": (uz_t, uz_w + _AI_NOTE["uz"], ""), "ru": (ru_t, ru_w + _AI_NOTE["ru"], ""), "en": ("", "", "")}
 
 
+# C / C++ memory safety.
+RULES.update({
+    "ARX-C-BOF": {
+        "uz": ("Bufer to'lishi (buffer overflow)", "Ma'lumot qat'iy o'lchamli buferga uzunligi tekshirilmasdan nusxalanyapti — stek yoki heap ustiga yozilib, dasturni boshqarib olish mumkin.",
+               "Har bir nusxani manzil o'lchami bilan cheklang: snprintf(buf, sizeof(buf), \"%s\", src) yoki strlcpy; kiruvchi uzunlikni oldindan tekshiring."),
+        "ru": ("Переполнение буфера", "Данные копируются в буфер фиксированного размера без проверки длины — перезапись стека или кучи и захват управления программой.",
+               "Ограничивайте каждое копирование размером приёмника: snprintf(buf, sizeof(buf), \"%s\", src) или strlcpy; проверяйте длину входа заранее."),
+        "en": ("Buffer overflow", "", ""),
+    },
+    "ARX-C-GETS": {
+        "uz": ("Tabiatan xavfli funksiya (gets)", "gets() qatorni cheksiz o'qiydi — har bir chaqiruv bufer to'lishiga olib kelishi mumkin.",
+               "gets() ni fgets(buf, sizeof(buf), stdin) bilan almashtiring."),
+        "ru": ("Опасная по своей природе функция (gets)", "gets() читает строку без ограничения длины — каждый вызов может переполнить буфер.",
+               "Замените gets() на fgets(buf, sizeof(buf), stdin)."),
+        "en": ("Inherently dangerous function", "", ""),
+    },
+    "ARX-C-UAF": {
+        "uz": ("Bo'shatilgan xotiradan foydalanish (use-after-free)", "Xotira free/delete qilingandan keyin unga yana murojaat qilinyapti — hujumchi o'sha joyga o'z ma'lumotini joylab, dasturni boshqarishi mumkin.",
+               "free/delete'dan keyin xotiraga tegmang: foydalanishni undan oldinga ko'chiring va ko'rsatkichni NULL / nullptr qiling."),
+        "ru": ("Использование после освобождения (use-after-free)", "К памяти обращаются после free/delete — атакующий может подложить туда свои данные и перехватить управление.",
+               "Не трогайте память после free/delete: перенесите использование до освобождения и обнулите указатель (NULL / nullptr)."),
+        "en": ("Use after free", "", ""),
+    },
+    "ARX-C-DFREE": {
+        "uz": ("Ikki marta bo'shatish (double free)", "Bitta xotira ikki marta bo'shatilyapti — heap buziladi, bu ko'pincha kod bajarilishiga olib keladi.",
+               "free'dan keyin ko'rsatkichni NULL qiling — ikkinchi free zararsiz bo'ladi; xotira egaligini bitta joyda saqlang."),
+        "ru": ("Двойное освобождение (double free)", "Одна и та же память освобождается дважды — куча повреждается, что часто ведёт к выполнению кода.",
+               "Обнуляйте указатель после free — повторный free станет безвредным; держите владение памятью в одном месте."),
+        "en": ("Double free", "", ""),
+    },
+    "ARX-C-FMT": {
+        "uz": ("Format satri zaifligi", "Format satri o'zgaruvchidan olinmoqda — kiritilgan %n / %x orqali xotirani o'qish yoki yozish mumkin.",
+               "Doimiy format satridan foydalaning: printf(msg) emas, printf(\"%s\", msg)."),
+        "ru": ("Уязвимость форматной строки", "Форматная строка берётся из переменной — через %n / %x во входе можно читать или писать память.",
+               "Используйте постоянную форматную строку: printf(\"%s\", msg) вместо printf(msg)."),
+        "en": ("Format string vulnerability", "", ""),
+    },
+    "ARX-C-INTOVF": {
+        "uz": ("Xotira ajratishda butun son to'lishi", "Ajratiladigan hajm tekshirilmagan kiruvchi qiymatdan ko'paytirib hisoblanyapti — natija \"o'ralib\" ketsa, juda kichik bufer ajratiladi.",
+               "Ko'paytirishni to'lishga tekshiring (yoki calloc / reallocarray ishlating)."),
+        "ru": ("Целочисленное переполнение при выделении памяти", "Размер выделения вычисляется умножением непроверенного входного значения — при переполнении выделяется слишком маленький буфер.",
+               "Проверяйте умножение на переполнение (или используйте calloc / reallocarray)."),
+        "en": ("Integer overflow in allocation size", "", ""),
+    },
+    "ARX-C-CMDI": {
+        "uz": ("OS buyruq in'ektsiyasi", "system()/popen() kiritilgan qiymatdan yig'ilgan buyruqni bajaryapti — hujumchi istalgan buyruqni ishga tushiradi.",
+               "system()/popen() o'rniga argumentlar massivi bilan execve chaqiring va har bir qiymatni allow-list bilan tekshiring."),
+        "ru": ("Инъекция команд ОС", "system()/popen() выполняют команду, собранную из ввода, — атакующий запускает любую команду.",
+               "Вместо system()/popen() вызывайте execve с массивом аргументов и проверяйте значения по allow-list."),
+        "en": ("OS command injection", "", ""),
+    },
+})
+
+
 DEP = {
     "uz": {"title": "Zaif kutubxona", "mal_title": "Zararli paket",
            "msg": "{pkg}@{ver}: {n} ta ma'lum zaiflik ({ids}) — {summary}",

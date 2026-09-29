@@ -27,7 +27,7 @@ FUNCTIONS = {
     "function_definition", "decorated_definition",
 }
 MAX_WINDOW = 40
-LANG = {"javascript": "javascript", "typescript": "typescript", "tsx": "tsx", "python": "python"}
+LANG = {"javascript": "javascript", "typescript": "typescript", "tsx": "tsx", "python": "python", "c": "c", "cpp": "cpp"}
 FENCE = re.compile(r"```[\w+-]*\n(.*?)```", re.DOTALL)
 
 
@@ -118,6 +118,7 @@ def _extract(reply: str) -> str | None:
 IMPORT = {
     "py": re.compile(r"^\s*(?:import\s+[\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*|from\s+[\w.]+\s+import\s+.+)\s*$"),
     "js": re.compile(r"^\s*(?:(?:const|let|var)\s+[\w${}\s,:]+=\s*require\([^)]*\);?|import\s+.+\s+from\s+['\"][^'\"]+['\"];?)\s*$"),
+    "c": re.compile(r"^\s*#\s*include\s*[<\"][^>\"]+[>\"]\s*$"),
 }
 
 
@@ -160,7 +161,7 @@ def propose(ai: LocalAI, root: Path, finding: Finding, attempts: int = 2) -> Pat
     original = "".join(lines[start - 1:end])
     indent = re.match(r"[ \t]*", lines[start - 1]).group(0)
 
-    family = "js" if grammar != "python" else "py"
+    family = {"python": "py", "c": "c", "cpp": "c"}.get(grammar, "js")
     feedback, fixed, diff, verified, reason = "", "", "", False, "model returned no code"
     shift = 0
     for _ in range(attempts):
@@ -279,7 +280,7 @@ def apply(root: Path, patches: list[Patch]) -> list[Patch]:
             imports += [i for i in p.imports if i not in imports]
             applied.append(p)
         if imports:
-            family = "py" if path.suffix == ".py" else "js"
+            family = "py" if path.suffix == ".py" else "c" if path.suffix in {".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh"} else "js"
             lines, _ = _hoist(lines, imports, family)
         path.write_text("".join(lines), encoding="utf-8")
     return applied

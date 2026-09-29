@@ -38,6 +38,13 @@ def to_sarif(result: ScanResult) -> str:
         }
         for r in [*ALL_RULES, DependencyRule()]
     ]
+    # Findings can carry ids that are not top-level rules (ARX-C-GETS, deep-scan checks, AI review) — describe those too.
+    known = {r["id"] for r in rules}
+    for f in result.findings:
+        if f.rule_id not in known:
+            known.add(f.rule_id)
+            rules.append({"id": f.rule_id, "name": f.title.title().replace(" ", ""), "shortDescription": {"text": f.title},
+                          "fullDescription": {"text": f.title}, "helpUri": _cwe_url(f.cwe), "properties": {"tags": ["security", f.cwe]}})
     index = {r["id"]: i for i, r in enumerate(rules)}
     results = []
     for f in result.findings:
