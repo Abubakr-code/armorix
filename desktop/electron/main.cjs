@@ -8,6 +8,17 @@ const fs = require("node:fs");
 const os = require("node:os");
 const readline = require("node:readline");
 
+// Ubuntu 24.04+ blocks the unprivileged user namespaces Chromium's sandbox needs; the .deb installs an AppArmor
+// profile for that, an AppImage cannot — so an AppImage on such a system runs without the OS-level sandbox
+// (the UI is a local page under a strict CSP either way).
+if (process.platform === "linux" && process.env.APPIMAGE) {
+  try {
+    if (fs.readFileSync("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", "utf8").trim() === "1") app.commandLine.appendSwitch("no-sandbox");
+  } catch {
+    /* no such setting: the sandbox works */
+  }
+}
+
 const REPO = "Abubakr-code/armorix";
 const SITE = "https://abubakr-code.github.io";
 const isMac = process.platform === "darwin";

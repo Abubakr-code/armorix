@@ -63,6 +63,13 @@ jobs:
           npm run build
           npx electron-builder ${{ matrix.desktop }} --publish never
 
+      - name: Desktop — macOS signature (ad-hoc) must be valid, or Apple Silicon calls the app "damaged"
+        if: runner.os == 'macOS'
+        run: |
+          app=$(ls -d desktop/release/mac*/Armorix.app | head -1)
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv "$app" 2>&1 | grep -E "Signature|Identifier"
+
       - name: Desktop — launch the packaged app and take screenshots
         if: runner.os == 'Linux' && matrix.desktop != ''
         run: |

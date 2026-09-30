@@ -1,7 +1,7 @@
 {
   "name": "armorix-desktop",
   "productName": "Armorix",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Offline AI code auditor for developers",
   "author": "Armorix",
   "homepage": "https://armorix.security",
@@ -74,7 +74,10 @@
     },
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
     },
     "artifactName": "Armorix-${os}-${arch}.${ext}",
     "publish": null,
