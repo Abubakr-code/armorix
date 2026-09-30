@@ -1,0 +1,181 @@
+# End-to-end check of a PUBLISHED release, the way a new user gets it — on clean Windows, macOS and Ubuntu machines:
+#   one-line CLI install from the website · scan · reports · local AI setup + verified fix · desktop app install + launch
+# Runs by itself when a release is published, or by hand: Actions → e2e → Run workflow.
+name: e2e
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release to test (default latest)
+        default: latest
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14, ubuntu-24.04, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag || 'latest' }}
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4   # only for examples/ — nothing is built here
+
+      - uses: actions/setup-python@v5   # only for the small JSON checks below; Armorix itself needs no Python
+        with:
+          python-version: "3.12"
+
+      - name: Sample project (a copy the AI may change)
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/shop"
+          cp -r examples/vuln-shop/. "$RUNNER_TEMP/shop/"
+          echo "SHOP=$RUNNER_TEMP/shop" >> "$GITHUB_ENV"
+
+      # ── CLI, exactly as the website says ──────────────────────
+      - name: CLI install (Linux / macOS) — curl … | sh
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          [ "$TAG" = latest ] || export ARMORIX_VERSION="$TAG"
+          curl -fsSL https://abubakr-code.github.io/install.sh | ARMORIX_NO_MODIFY_PATH=1 sh
+          echo "$HOME/.armorix/bin" >> "$GITHUB_PATH"
+
+      - name: CLI install (Windows) — irm … | iex
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ($env:TAG -ne "latest") { $env:ARMORIX_VERSION = $env:TAG }
+          irm https://abubakr-code.github.io/install.ps1 | iex
+          "$env:LOCALAPPDATA\Armorix\cli\armorix" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: CLI scan finds the planted vulnerabilities (uz / ru / en)
+        shell: bash
+        run: |
+          armorix --version
+          armorix scan "$SHOP" --lang uz --fail-on none | tail -4
+          armorix scan "$SHOP" --lang ru --fail-on none > /dev/null
+          armorix scan "$SHOP" --format json --fail-on none > scan.json
+          python -c "
+          import json, collections
+          d = json.load(open('scan.json', encoding='utf-8'))
+          rules = collections.Counter(f['rule_id'] for f in d['findings'])
+          print(len(d['findings']), 'findings:', dict(rules))
+          missing = {'ARX-SQLI', 'ARX-CMDI', 'ARX-EVAL', 'ARX-XSS', 'ARX-SECRET', 'ARX-C-BOF', 'ARX-C-UAF'} - set(rules)
+          assert len(d['findings']) >= 15 and not missing, f'missing {missing}'
+          "
+
+      - name: CLI reports — HTML, SARIF, Markdown, GitHub annotations, baseline, CI gate
+        shell: bash
+        run: |
+          armorix scan "$SHOP" --format html -o report.html --fail-on none
+          armorix scan "$SHOP" --format sarif -o report.sarif --fail-on none
+          armorix scan "$SHOP" --format markdown --fail-on none > report.md
+          armorix scan "$SHOP" --format github --fail-on none > annotations.txt
+          armorix scan "$SHOP" --write-baseline baseline.json
+          armorix scan "$SHOP" --baseline baseline.json --fail-on low > /dev/null   # nothing new → exit 0
+          set +e; armorix scan "$SHOP" --fail-on critical > /dev/null; code=$?; set -e
+          test "$code" = 1                                                          # criticals fail the build
+          test -s report.html && test -s report.sarif && grep -q "SQL" report.md && grep -q "::error" annotations.txt
+          armorix rules | head -3
+          armorix update --check
+
+      # ── local AI: llama.cpp + model downloaded by the CLI, then a verified patch ──
+      - name: Local AI setup (llama.cpp + Qwen2.5-Coder, 1.1 GB)
+        shell: bash
+        run: armorix ai setup
+
+      - name: AI fix — patches must pass the re-scan
+        shell: bash
+        run: |
+          count() { armorix scan "$SHOP" --format json --fail-on none | python -c "import json,sys;print(len(json.load(sys.stdin)['findings']))"; }
+          before=$(count)
+          armorix fix "$SHOP" --apply --limit 3 | tee fix.log
+          after=$(count)
+          echo "findings: $before → $after"
+          test "$after" -lt "$before"
+
+      # ── desktop app ───────────────────────────────────────────
+      - name: Desktop — download
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) pattern="Armorix-win-x64.exe" ;;
+            macOS) pattern="Armorix-mac-arm64.dmg" ;;
+            Linux) pattern="Armorix-linux-*" ;;
+          esac
+          if [ "$TAG" = latest ]; then gh release download --repo Abubakr-code/armorix --pattern "$pattern" --dir app
+          else gh release download "$TAG" --repo Abubakr-code/armorix --pattern "$pattern" --dir app; fi
+          ls -la app
+
+      - name: Desktop — install and launch (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Start-Process -Wait -FilePath "app\Armorix-win-x64.exe" -ArgumentList "/S"
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs", "$env:ProgramFiles" -Recurse -Filter Armorix.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { throw "Armorix.exe was not installed" }
+          Write-Host "installed: $($exe.FullName)"
+          & (Join-Path $exe.DirectoryName "resources\engine\armorix.exe") --version
+          New-Item -ItemType Directory smoke | Out-Null
+          $env:ARMORIX_SMOKE = "$PWD\smoke"; $env:ARMORIX_SMOKE_FOLDER = $env:SHOP; $env:ARMORIX_SMOKE_VIEWS = "rules,settings"
+          $env:ARMORIX_SMOKE_START = "6000"; $env:ARMORIX_SMOKE_WAIT = "15000"
+          $p = Start-Process -FilePath $exe.FullName -PassThru
+          if (-not $p.WaitForExit(240000)) { $p.Kill(); throw "the app did not finish its smoke run" }
+          Get-ChildItem smoke
+          if (-not (Test-Path smoke\3-findings.png)) { throw "no findings screenshot" }
+
+      - name: Desktop — install and launch (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          hdiutil attach app/Armorix-mac-arm64.dmg -nobrowse -mountpoint /Volumes/Armorix
+          cp -R /Volumes/Armorix/Armorix.app /Applications/
+          hdiutil detach /Volumes/Armorix
+          codesign --verify --deep --strict /Applications/Armorix.app && echo "signature ok"
+          spctl --assess --type execute -vv /Applications/Armorix.app || echo "(expected: not notarized — first launch needs right-click → Open)"
+          /Applications/Armorix.app/Contents/Resources/engine/armorix --version
+          mkdir smoke
+          ARMORIX_SMOKE=$PWD/smoke ARMORIX_SMOKE_FOLDER=$SHOP ARMORIX_SMOKE_VIEWS=rules,settings ARMORIX_SMOKE_START=6000 ARMORIX_SMOKE_WAIT=15000 \
+            timeout 240 /Applications/Armorix.app/Contents/MacOS/Armorix
+          ls smoke && test -f smoke/3-findings.png
+
+      - name: Desktop — .deb install and launch (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb > /dev/null
+          sudo apt-get install -y ./app/Armorix-linux-amd64.deb
+          command -v armorix && /usr/bin/armorix --version        # the .deb puts the CLI on PATH
+          mkdir -p smoke-deb
+          ARMORIX_SMOKE=$PWD/smoke-deb ARMORIX_SMOKE_FOLDER=$SHOP ARMORIX_SMOKE_VIEWS=rules,settings ARMORIX_SMOKE_WAIT=15000 \
+            timeout 240 xvfb-run -a -s "-screen 0 1440x900x24" /opt/Armorix/armorix-desktop
+          ls smoke-deb && test -f smoke-deb/3-findings.png
+
+      - name: Desktop — AppImage without FUSE (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          chmod +x app/Armorix-linux-x86_64.AppImage
+          mkdir -p smoke
+          APPIMAGE_EXTRACT_AND_RUN=1 ARMORIX_SMOKE=$PWD/smoke ARMORIX_SMOKE_FOLDER=$SHOP ARMORIX_SMOKE_WAIT=15000 \
+            timeout 240 xvfb-run -a -s "-screen 0 1440x900x24" app/Armorix-linux-x86_64.AppImage
+          ls smoke && test -f smoke/3-findings.png
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-${{ matrix.os }}
+          path: |
+            smoke*/
+            fix.log
+            report.md
+            scan.json
