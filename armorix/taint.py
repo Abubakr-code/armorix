@@ -165,6 +165,56 @@ class Analyzer:
             return text(fn.child_by_field_name("object")), text(prop)
         return "", text(fn)
 
+    # ── reaching definitions (light) ────────────────────────────
+    # Taint itself is flow-insensitive; at a *use* we look at the latest plain assignment before it in an enclosing
+    # block. `$id = $_GET['id']; $id = intval($id); query($id)` → the use sees the clean intval() value.
+    BLOCKS = {"block", "statement_block", "compound_statement", "program", "module", "source_file", "statement_list",
+              "function_body", "class_body", "declaration_list", "switch_body"}
+
+    def _block_of(self, node: Node) -> Node | None:
+        cur = node.parent
+        while cur is not None and cur.type not in self.BLOCKS:
+            cur = cur.parent
+        return cur
+
+    def _clean_here(self, key: tuple, use: Node) -> bool:
+        defs = self._defs.get(key) if hasattr(self, "_defs") else None
+        if not defs:
+            return False
+        best = None
+        for start, block, value, plain in defs:
+            if start >= use.start_byte:
+                break
+            if block is not None and block.start_byte <= use.start_byte < block.end_byte:
+                best = (value, plain)
+        if best is None or not best[1]:
+            return False
+        value = best[0]
+        if value.id in self._checking:
+            return False
+        self._checking.add(value.id)
+        try:
+            return self.tainted_by(value) is None
+        finally:
+            self._checking.discard(value.id)
+
+    def _record_defs(self, assignments) -> None:
+        self._defs: dict[tuple, list] = {}
+        self._checking: set[int] = set()
+        for node, names, value in assignments:
+            plain = node.type in self.declares or node.type in {"assignment_expression", "assignment", "assignment_statement",
+                                                                  "short_var_declaration", "variable_declarator"}
+            if node.type in {"for_in_statement", "for_statement", "range_clause", "enhanced_for_statement"}:
+                plain = False
+            if len(names) != 1:
+                plain = False  # destructuring / tuple targets: keep the conservative answer
+            for name, name_node in names:
+                key = self._lookup(self.tainted, name, name_node) or self._lookup(self.dynamic, name, name_node) \
+                    or (self.scopes(name_node)[0], name)
+                self._defs.setdefault(key, []).append((node.start_byte, self._block_of(node), value, plain))
+        for items in self._defs.values():
+            items.sort(key=lambda d: d[0])
+
     def _safe_cast(self, node: Node) -> bool:
         if node.type not in self.call_types:
             return False
@@ -188,7 +238,7 @@ class Analyzer:
                     return Var(text(n), ret)
             if n.type in self.name_types and n.type != "shorthand_property_identifier_pattern":
                 key = self._lookup(self.tainted, text(n), n)
-                if key:
+                if key and not self._clean_here(key, n):
                     return Var(text(n), key)
             if n.type in {"lambda", "arrow_function", "function_expression"} and n is not node:
                 continue  # a callback's body is not the value itself
@@ -501,6 +551,7 @@ class Analyzer:
             changed |= self._returns()
             if not changed:
                 break
+        self._record_defs(assignments)
 
     # ── tracing ─────────────────────────────────────────────────
     def root(self, via: str) -> str:

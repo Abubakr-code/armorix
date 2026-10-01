@@ -11,6 +11,7 @@ C, H, M, L = Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW
 
 
 def run(tmp_path, name, code):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / name).write_text(textwrap.dedent(code).lstrip())
     return sorted((f.rule_id, f.severity) for f in scan(tmp_path, deps=False).findings)
 
@@ -164,3 +165,37 @@ def test_php_invented_variable_is_rejected(tmp_path):
     finding = next(f for f in scan(tmp_path, deps=False).findings if f.rule_id == "ARX-SQLI")
     ok, reason = _verify(path, finding, old, new, 4, 6)
     assert not ok and "$pdo" in reason
+
+
+FLOW = [
+    # sanitized later in the same block → the use sees the clean value
+    ("a.php", '<?php\n$id = $_GET["id"];\n$id = intval($id);\nmysqli_query($c, "SELECT * FROM t WHERE id = $id");', "ARX-SQLI-CRIT"),
+    ("a.js", "let id = req.query.id;\nid = parseInt(id, 10);\ndb.query('SELECT * FROM t WHERE id = ' + id);", "ARX-SQLI-CRIT"),
+    ("a.py", 'q = request.args["q"]\nq = int(q)\ncursor.execute("SELECT * FROM t LIMIT %s" % q)', "ARX-SQLI-CRIT"),
+    # validated by an enclosing if
+    ("a.php", '<?php\n$ip = $_GET["ip"];\n$o = explode(".", $ip);\nif (is_numeric($o[0]) && is_numeric($o[1])) {\n'
+              '  $ip = $o[0] . "." . $o[1];\n  shell_exec("ping " . $ip);\n}', "ARX-CMDI"),
+    # validated by an earlier bail-out
+    ("a.php", '<?php\n$n = $_GET["n"];\nif (!ctype_digit($n)) { die("bad"); }\nsystem("seq " . $n);', "ARX-CMDI"),
+]
+
+
+@pytest.mark.parametrize("name, code, rule", FLOW)
+def test_flow_sensitive_safe(tmp_path, name, code, rule):
+    found = run(tmp_path, name, code)
+    if rule.endswith("-CRIT"):
+        assert (rule[:-5], C) not in found, found
+    else:
+        assert all(r != rule for r, _ in found), found
+
+
+def test_reassignment_inside_a_branch_keeps_the_taint(tmp_path):
+    code = '<?php\n$x = $_GET["x"];\nif ($debug) { $x = "fixed"; }\nsystem("echo " . $x);'
+    assert ("ARX-CMDI", C) in run(tmp_path, "a.php", code)
+
+
+def test_php_html_built_from_input_is_xss(tmp_path):
+    code = '<?php\n$name = $_GET["name"];\n$html .= "<pre>Hello {$name}</pre>";'
+    assert ("ARX-XSS", H) in run(tmp_path, "a.php", code)
+    safe = '<?php\n$name = htmlspecialchars($_GET["name"]);\n$html .= "<pre>Hello {$name}</pre>";'
+    assert ("ARX-XSS", H) not in run(tmp_path / "safe", "b.php", safe)

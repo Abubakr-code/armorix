@@ -9,7 +9,7 @@ const { runTests } = require("@vscode/test-electron");
   fs.cpSync(path.resolve(__dirname, "../../examples/vuln-shop"), ws, { recursive: true });
   fs.mkdirSync(path.join(ws, ".vscode"));
   fs.writeFileSync(path.join(ws, ".vscode", "settings.json"), JSON.stringify({
-    "armorix.path": path.resolve(__dirname, "../../.venv/bin/armorix"),
+    "armorix.path": process.env.ARMORIX_PATH || path.resolve(__dirname, "../../.venv/bin/armorix"),
     "armorix.language": "uz",
   }));
   const user = fs.mkdtempSync(path.join(os.tmpdir(), "armorix-vsc-user-"));

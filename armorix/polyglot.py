@@ -77,6 +77,9 @@ SAFE = {"intval", "floatval", "boolval", "abs", "count", "strlen", "Atoi", "Pars
         "urlencode", "rawurlencode", "http_build_query", "json_encode", "wp_json_encode", "filter_var", "filter_input", "e", "__", "_e",
         "html.EscapeString", "HtmlUtils.htmlEscape", "escapeHtml", "encodeForHTML",
         # checks that return booleans / positions, not the input
+        # SQL escaping: the value can still be printed unsafely, but it no longer changes a quoted SQL literal
+        "mysqli_real_escape_string", "mysql_real_escape_string", "real_escape_string", "pg_escape_string", "pg_escape_literal",
+        "sqlite_escape_string", "addslashes",
         "isset", "empty", "is_array", "is_string", "is_null", "in_array", "array_key_exists", "preg_match", "strpos", "stripos", "strcmp",
         "hash_equals", "wp_validate_redirect", "wp_sanitize_redirect", "current_user_can", "wp_verify_nonce", "check_admin_referer"}
 NUMERIC_WRAPPERS = {"Integer", "Long", "Double", "Float", "Short", "Boolean", "UUID", "strconv"}
@@ -389,6 +392,60 @@ FIXES = {
 }
 RULES = {r.id: r for r in ALL_RULES}
 
+# A tainted value that an enclosing (or earlier, bail-out) `if` validates is not reported: is_numeric, allow-lists, regexes …
+VALIDATOR = re.compile(r"is_numeric\(|is_int\(|ctype_digit\(|ctype_alnum\(|filter_var\(|preg_match\(|in_array\(|"
+                       r"===?\s*['\"]|['\"]\s*===?|\.matches\(|Pattern\.matches|MatchString\(|\.Match\(|strconv\.Atoi|net\.ParseIP\(|"
+                       r"InetAddress|isValid\w*\(|validate\w*\(")
+VALIDATED_RULES = {"ARX-SQLI", "ARX-CMDI", "ARX-PATH", "ARX-LFI", "ARX-SSRF", "ARX-REDIRECT", "ARX-EVAL", "ARX-XSS"}
+BAIL = re.compile(r"\b(?:exit|die|return|throw|break|continue|panic)\b|http\.Error\(")
+
+
+def _names(taint, via) -> set[str]:
+    """The tainted variable and every variable it was derived from."""
+    names, key, seen = set(), getattr(via, "key", None), set()
+    while key is not None and key in taint.tainted and key not in seen:
+        seen.add(key)
+        names.add(str(key[1]))
+        key = taint.tainted[key].via
+    return {n for n in names if n and not n.startswith("<")}
+
+
+def _reaching_names(taint, names: set[str], at: Node) -> set[str]:
+    """Variables the latest assignment (before `at`) of each name was built from: `$t = $octet[0] . '.' . $octet[1]` → $octet."""
+    out = set()
+    for key, defs in getattr(taint, "_defs", {}).items():
+        if str(key[1]) not in names:
+            continue
+        prior = [d for d in defs if d[0] < at.start_byte and (d[1] is None or d[1].start_byte <= at.start_byte < d[1].end_byte)]
+        if prior:
+            out |= {text(n) for n in walk(prior[-1][2]) if n.type in taint.name_types and not text(n).startswith(("$_", "$GLOBALS"))}
+    return out
+
+
+def _validated(node: Node, taint, via) -> bool:
+    names = _names(taint, via)
+    if not names:
+        return False
+    names |= _reaching_names(taint, names, node)
+
+    def checks(cond: Node | None) -> bool:
+        t = text(cond)
+        return bool(cond is not None and VALIDATOR.search(t) and any(re.search(rf"(?<![\w$]){re.escape(n)}(?!\w)", t) for n in names))
+
+    cur = node.parent
+    while cur is not None and cur.type not in taint.function_types:
+        if cur.type == "if_statement" and checks(cur.child_by_field_name("condition")):
+            return True  # the sink sits inside `if (is_numeric($x)) { … }`
+        parent = cur.parent
+        if parent is not None:  # an earlier `if (!valid($x)) { exit; }` in the same block
+            for sib in parent.named_children:
+                if sib.start_byte >= cur.start_byte:
+                    break
+                if sib.type == "if_statement" and checks(sib.child_by_field_name("condition")) and BAIL.search(text(sib)):
+                    return True
+        cur = parent
+    return False
+
 
 def _pick(args: list[Node], index: int) -> list[Node]:
     if not args:
@@ -447,6 +504,8 @@ def _report(src, taint, node, rule_id, name, via, dynamic_msg=None, severity=Non
     rule = RULES[rule_id]
     impact_t, impact_d = IMPACT.get(rule_id, ("", ""))
     fix = FIXES.get((rule_id, src.family), "")
+    if via and rule_id in VALIDATED_RULES and _validated(node, taint, via):
+        return None
     if via:
         sev = severity or (Severity.CRITICAL if rule_id in {"ARX-SQLI", "ARX-CMDI", "ARX-EVAL", "ARX-DESER", "ARX-SSTI", "ARX-LFI"}
                            else Severity.MEDIUM if rule_id == "ARX-REDIRECT" else Severity.HIGH)
@@ -564,6 +623,9 @@ def _sensitive_target(call: Node, taint) -> bool:
     return False
 
 
+HTML_TAG = re.compile(r"""['"][^'"]*<\s*/?\s*[a-zA-Z][\w-]*[^'"]*['"]""")  # a string literal that contains a tag
+
+
 def _special_node(src, taint, node) -> Finding | None:
     fam, t = src.family, node.type
     if fam == "php" and t in {"echo_statement", "print_intrinsic", "exit_statement"}:
@@ -573,6 +635,13 @@ def _special_node(src, taint, node) -> Finding | None:
             via = taint.tainted_by(value)
             if via:
                 return _report(src, taint, node, "ARX-XSS", "echo", via)
+    if fam == "php" and t in {"assignment_expression", "augmented_assignment_expression"}:
+        # $html .= '<pre>Hello ' . $_GET['name'] . '</pre>';  — markup built from input, printed later (often in another file)
+        value = node.child_by_field_name("right")
+        if value is not None and taint.is_dynamic_string(value) and HTML_TAG.search(text(value)) and not _sanitized("ARX-XSS", value):
+            via = taint.tainted_by(value)
+            if via:
+                return _report(src, taint, node, "ARX-XSS", "HTML", via)
     if fam == "php" and t in {"include_expression", "include_once_expression", "require_expression", "require_once_expression"}:
         value = node.named_children[0] if node.named_children else None
         if value is None or taint.is_literal(value):

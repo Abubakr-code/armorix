@@ -145,7 +145,7 @@ jobs:
           /Applications/Armorix.app/Contents/Resources/engine/armorix --version
           mkdir smoke
           ARMORIX_SMOKE=$PWD/smoke ARMORIX_SMOKE_FOLDER=$SHOP ARMORIX_SMOKE_VIEWS=rules,settings ARMORIX_SMOKE_START=6000 ARMORIX_SMOKE_WAIT=15000 \
-            timeout 240 /Applications/Armorix.app/Contents/MacOS/Armorix
+            perl -e 'alarm shift; exec @ARGV' 240 /Applications/Armorix.app/Contents/MacOS/Armorix
           ls smoke && test -f smoke/3-findings.png
 
       - name: Desktop — .deb install and launch (Ubuntu)
@@ -156,8 +156,14 @@ jobs:
           sudo apt-get install -y ./app/Armorix-linux-amd64.deb
           command -v armorix && /usr/bin/armorix --version        # the .deb puts the CLI on PATH
           mkdir -p smoke-deb
-          ARMORIX_SMOKE=$PWD/smoke-deb ARMORIX_SMOKE_FOLDER=$SHOP ARMORIX_SMOKE_VIEWS=rules,settings ARMORIX_SMOKE_WAIT=15000 \
-            timeout 240 xvfb-run -a -s "-screen 0 1440x900x24" /opt/Armorix/armorix-desktop
+          # Attempt 2 covers the GPU fallback: a machine that cannot paint makes Armorix remember "no GPU" and restart;
+          # under xvfb-run the display dies with the first process, so the test starts it again itself.
+          for attempt in 1 2; do
+            ARMORIX_SMOKE=$PWD/smoke-deb ARMORIX_SMOKE_FOLDER=$SHOP ARMORIX_SMOKE_VIEWS=rules,settings ARMORIX_SMOKE_WAIT=15000 \
+              timeout 240 xvfb-run -a -s "-screen 0 1440x900x24" /opt/Armorix/armorix-desktop || true
+            [ -f smoke-deb/3-findings.png ] && break
+            echo "attempt $attempt: no screenshots; GPU flag: $(cat ~/.config/Armorix/gpu-disabled 2>/dev/null || echo none)"
+          done
           ls smoke-deb && test -f smoke-deb/3-findings.png
 
       - name: Desktop — AppImage without FUSE (Ubuntu)
@@ -166,8 +172,11 @@ jobs:
         run: |
           chmod +x app/Armorix-linux-x86_64.AppImage
           mkdir -p smoke
-          APPIMAGE_EXTRACT_AND_RUN=1 ARMORIX_SMOKE=$PWD/smoke ARMORIX_SMOKE_FOLDER=$SHOP ARMORIX_SMOKE_WAIT=15000 \
-            timeout 240 xvfb-run -a -s "-screen 0 1440x900x24" app/Armorix-linux-x86_64.AppImage
+          for attempt in 1 2; do
+            APPIMAGE_EXTRACT_AND_RUN=1 ARMORIX_SMOKE=$PWD/smoke ARMORIX_SMOKE_FOLDER=$SHOP ARMORIX_SMOKE_WAIT=15000 \
+              timeout 240 xvfb-run -a -s "-screen 0 1440x900x24" app/Armorix-linux-x86_64.AppImage || true
+            [ -f smoke/3-findings.png ] && break
+          done
           ls smoke && test -f smoke/3-findings.png
 
       - uses: actions/upload-artifact@v4

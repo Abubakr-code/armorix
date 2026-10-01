@@ -19,6 +19,33 @@ if (process.platform === "linux" && process.env.APPIMAGE) {
   }
 }
 
+// GPU fallback: on some machines (VMs without 3D acceleration, new Mesa under Xvfb, broken drivers) Chromium never
+// paints a frame and the window would stay invisible. If the first paint does not come — or the GPU process dies —
+// Armorix remembers it and restarts once with hardware acceleration off.
+const gpuOffFlag = path.join(app.getPath("userData"), "gpu-disabled");
+const gpuOff = Boolean(process.env.ARMORIX_DISABLE_GPU) || fs.existsSync(gpuOffFlag);
+if (gpuOff) app.disableHardwareAcceleration();
+
+function restartWithoutGpu(reason) {
+  if (gpuOff) return false;
+  console.error(`[armorix] ${reason} — restarting without GPU acceleration`);
+  try {
+    fs.mkdirSync(path.dirname(gpuOffFlag), { recursive: true });
+    fs.writeFileSync(gpuOffFlag, `${new Date().toISOString()} ${reason}\n`);
+  } catch {
+    /* read-only profile: the env var below still carries the choice */
+  }
+  app.relaunch({ args: process.argv.slice(1), execPath: process.env.APPIMAGE || process.execPath });
+  quitting = true;
+  stopEngine();
+  app.exit(0);
+  return true;
+}
+
+app.on("child-process-gone", (_event, details) => {
+  if (details.type === "GPU" && details.reason !== "clean-exit") restartWithoutGpu(`GPU process ${details.reason}`);
+});
+
 const REPO = "Abubakr-code/armorix";
 const SITE = "https://abubakr-code.github.io";
 const isMac = process.platform === "darwin";
@@ -136,7 +163,16 @@ function createWindow() {
     },
   });
   if (state.maximized) win.maximize();
-  win.once("ready-to-show", () => win.show());
+  let painted = false;
+  win.once("ready-to-show", () => {
+    painted = true;
+    win.show();
+    if (process.env.ARMORIX_SMOKE) smoke(win);
+  });
+  setTimeout(() => {
+    if (painted || restartWithoutGpu("no frame painted in 12 s")) return;
+    win.show(); // even without a confirmed paint, never leave the user with no window
+  }, 12000);
   win.on("close", saveState);
   // Links open in the system browser, never inside the app.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -149,9 +185,6 @@ function createWindow() {
   win.webContents.on("did-finish-load", () => {
     if (pendingPath) send("open-path", pendingPath);
     pendingPath = null;
-  });
-  win.webContents.once("did-finish-load", () => {
-    if (process.env.ARMORIX_SMOKE) smoke(win);
   });
 }
 
