@@ -22,7 +22,8 @@ const t = () => UI[cfg().get("language")] || UI.en;
 
 // The CLI: explicit setting → PATH → the desktop app's bundled engine.
 function candidates() {
-  const own = cfg().get("path");
+  // Only the user's own setting: a cloned repo's .vscode/settings.json must never choose the program we execute.
+  const own = cfg().inspect("path")?.globalValue;
   const exe = process.platform === "win32" ? "armorix.exe" : "armorix";
   const list = own ? [own] : [];
   list.push("armorix");

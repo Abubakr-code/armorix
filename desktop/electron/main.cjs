@@ -280,16 +280,25 @@ function unwatch() {
 }
 
 // ── editor ──────────────────────────────────────────────────────
+// On Windows `code` is a .cmd script that only runs through cmd.exe, which would interpret & | < > ^ " % in a
+// file name from the scanned (untrusted) repo — such names skip the editor and just get revealed in Explorer.
+const CMD_META = /["&|<>^%!\r\n]/;
+
 function openInEditor(file, line) {
-  const target = `${file}:${line || 1}`;
+  const target = `${file}:${Number(line) || 1}`;
+  const win32 = process.platform === "win32";
   const tryCode = (bin) =>
-    new Promise((ok) => execFile(bin, ["-g", target], { windowsHide: true, shell: process.platform === "win32" }, (err) => ok(!err)));
+    new Promise((ok) => {
+      if (win32 && CMD_META.test(target)) return ok(false);
+      const args = win32 ? ["-g", `"${target}"`] : ["-g", target];
+      execFile(bin, args, { windowsHide: true, shell: win32, windowsVerbatimArguments: win32 }, (err) => ok(!err));
+    });
   return (async () => {
     for (const bin of ["code", "codium", "cursor"]) {
       if (await tryCode(bin)) return "editor";
     }
-    await shell.openPath(file);
-    return "default";
+    shell.showItemInFolder(file); // never "open" the file itself: that could execute it
+    return "folder";
   })();
 }
 
@@ -339,7 +348,9 @@ async function checkUpdate() {
   const rel = await res.json();
   const latest = String(rel.tag_name || "").replace(/^v/, "");
   const asset = (rel.assets || []).find((a) => a.name === assetName());
+  const sums = (rel.assets || []).find((a) => a.name === "SHA256SUMS");
   return {
+    sums: sums ? sums.browser_download_url : null,
     current: app.getVersion(),
     latest,
     available: Boolean(latest) && newer(latest, app.getVersion()),
@@ -367,6 +378,23 @@ async function download(url, dest, onProgress) {
   await new Promise((r) => out.end(r));
 }
 
+/** The installer must match the release's SHA256SUMS — a corrupted or swapped download is deleted, never run. */
+async function verifyDownload(file, sumsUrl) {
+  if (!sumsUrl) throw new Error("the release has no SHA256SUMS — not installing an unverified file");
+  const res = await net.fetch(sumsUrl);
+  if (!res.ok) throw new Error(`checksums unavailable (${res.status})`);
+  const line = (await res.text()).split("\n").find((l) => l.trim().endsWith(` ${assetName()}`));
+  const expected = line ? line.trim().split(/\s+/)[0].toLowerCase() : "";
+  const actual = await new Promise((resolve, reject) => {
+    const hash = require("node:crypto").createHash("sha256");
+    fs.createReadStream(file).on("data", (d) => hash.update(d)).on("end", () => resolve(hash.digest("hex"))).on("error", reject);
+  });
+  if (!expected || expected !== actual) {
+    fs.rmSync(file, { force: true });
+    throw new Error("checksum mismatch — the download was discarded");
+  }
+}
+
 async function installUpdate() {
   const info = await checkUpdate();
   if (!info.available) return { ok: false, reason: "up-to-date" };
@@ -379,6 +407,7 @@ async function installUpdate() {
     const target = process.env.APPIMAGE;
     const tmp = `${target}.download`;
     await download(info.url, tmp, progress);
+    await verifyDownload(tmp, info.sums);
     fs.chmodSync(tmp, 0o755);
     fs.renameSync(tmp, target);
     app.relaunch({ execPath: target });
@@ -386,8 +415,9 @@ async function installUpdate() {
     app.exit(0);
     return { ok: true };
   }
-  const tmp = path.join(os.tmpdir(), assetName());
+  const tmp = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "armorix-update-")), assetName());
   await download(info.url, tmp, progress);
+  await verifyDownload(tmp, info.sums);
   spawn(tmp, [], { detached: true, stdio: "ignore" }).unref();
   quitting = true;
   app.quit();
@@ -460,7 +490,8 @@ ipcMain.handle("dialog:model", async () => {
 ipcMain.handle("shell:open", async (_e, target) => {
   if (typeof target === "string" && /^https:\/\//.test(target)) return shell.openExternal(target);
   if (typeof target === "string" && /^http:\/\/127\.0\.0\.1:\d+\/report\//.test(target)) return shell.openExternal(target);
-  if (typeof target === "string" && fs.existsSync(target)) return shell.openPath(target);
+  // Local paths: folders only — opening a file could run it (a scanned repo is untrusted content).
+  if (typeof target === "string" && fs.existsSync(target) && fs.statSync(target).isDirectory()) return shell.openPath(target);
   return null;
 });
 ipcMain.handle("shell:reveal", async (_e, target) => {

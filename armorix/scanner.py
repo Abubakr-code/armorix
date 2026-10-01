@@ -30,7 +30,7 @@ SKIP_DIRS = {
     ".git", "node_modules", ".venv", "venv", "env", "__pycache__", "dist", "build", ".next", ".nuxt",
     "coverage", "vendor", "site-packages", ".pytest_cache", ".mypy_cache", ".idea", ".turbo", ".cache",
     "third_party", "third-party", "bower_components", ".gradle", ".terraform", ".svelte-kit", ".output",
-    ".tox", ".nox", ".ruff_cache", "Pods", ".dart_tool", ".angular", ".parcel-cache", ".vercel", ".serverless",
+    ".tox", ".nox", ".ruff_cache", "Pods", ".dart_tool", ".angular", ".parcel-cache", ".vercel", ".serverless", ".vscode-test",
 }
 CONFIG_SUFFIXES = {".json", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".properties", ".xml", ".sh", ".tf"}
 MAX_BYTES = 1_000_000
