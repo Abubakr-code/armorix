@@ -342,22 +342,21 @@ function assetName() {
   return process.env.APPIMAGE ? "Armorix-linux-x86_64.AppImage" : "Armorix-linux-amd64.deb";
 }
 
+// The /releases/latest redirect names the newest tag without the REST API (and its 60-requests-per-hour limit).
 async function checkUpdate() {
-  const res = await net.fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: "application/vnd.github+json" } });
-  if (!res.ok) throw new Error(`GitHub ${res.status}`);
-  const rel = await res.json();
-  const latest = String(rel.tag_name || "").replace(/^v/, "");
-  const asset = (rel.assets || []).find((a) => a.name === assetName());
-  const sums = (rel.assets || []).find((a) => a.name === "SHA256SUMS");
+  const res = await net.fetch(`https://github.com/${REPO}/releases/latest`, { method: "HEAD" });
+  if (!res.ok || !res.url.includes("/releases/tag/")) throw new Error(`GitHub ${res.status}`);
+  const tag = res.url.replace(/\/+$/, "").split("/").pop();
+  const latest = tag.replace(/^v/, "");
+  const base = `https://github.com/${REPO}/releases/download/${tag}`;
   return {
-    sums: sums ? sums.browser_download_url : null,
+    sums: `${base}/SHA256SUMS`,
     current: app.getVersion(),
     latest,
     available: Boolean(latest) && newer(latest, app.getVersion()),
-    notes: String(rel.body || "").slice(0, 4000),
-    url: asset ? asset.browser_download_url : rel.html_url,
-    page: rel.html_url,
-    selfUpdate: Boolean(process.env.APPIMAGE || process.platform === "win32") && Boolean(asset),
+    url: `${base}/${assetName()}`,
+    page: res.url,
+    selfUpdate: Boolean(process.env.APPIMAGE || process.platform === "win32"),
   };
 }
 

@@ -7,7 +7,6 @@ it asks GitHub for the latest version, downloads the archive for this OS and che
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import platform
 import shutil
@@ -22,7 +21,6 @@ from pathlib import Path
 from . import __version__
 
 REPO = "Abubakr-code/armorix"
-API = f"https://api.github.com/repos/{REPO}/releases/latest"
 
 
 class UpdateError(Exception):
@@ -56,15 +54,22 @@ def _version_tuple(v: str) -> tuple:
 
 
 def latest() -> dict:
-    req = urllib.request.Request(API, headers={"Accept": "application/vnd.github+json", "User-Agent": f"armorix/{__version__}"})
+    """Latest release via the /releases/latest redirect — no REST API, so no 60-requests-per-hour limit
+    (shared office / university / CI addresses hit that limit quickly)."""
+    req = urllib.request.Request(f"https://github.com/{REPO}/releases/latest", method="HEAD",
+                                 headers={"User-Agent": f"armorix/{__version__}"})
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
-            rel = json.load(resp)
+            final = resp.geturl()
     except OSError as exc:
         raise UpdateError(f"cannot reach GitHub: {exc}") from None
-    tag = str(rel.get("tag_name", "")).lstrip("v")
-    assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
-    return {"version": tag, "newer": _version_tuple(tag) > _version_tuple(__version__), "assets": assets, "page": rel.get("html_url", "")}
+    tag = final.rstrip("/").rsplit("/", 1)[-1]
+    if "/releases/tag/" not in final or not tag:
+        raise UpdateError("GitHub did not return a release")
+    base = f"https://github.com/{REPO}/releases/download/{tag}"
+    assets = {name: f"{base}/{name}" for name in (asset_name(), "SHA256SUMS")}
+    version = tag.lstrip("v")
+    return {"version": version, "newer": _version_tuple(version) > _version_tuple(__version__), "assets": assets, "page": final}
 
 
 def _download(url: str, dest: Path) -> None:

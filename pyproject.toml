@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "armorix"
-version = "0.3.3"
+version = "0.3.4"
 description = "Offline, AST-based static analysis with a local AI engine"
 requires-python = ">=3.11"
 dependencies = [
