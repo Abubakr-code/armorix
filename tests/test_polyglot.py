@@ -17,6 +17,14 @@ def run(tmp_path, name, code):
 
 
 VULNERABLE = [
+    # a JDBC method name is distinctive enough that the receiver may be called anything
+    ("A.java", 'void h(HttpServletRequest req) throws Exception {\n'
+               '  String id = req.getParameter("id");\n'
+               '  st.executeQuery("SELECT * FROM users WHERE id = " + id);\n}', [("ARX-SQLI", C)]),
+    # the usual way a Go handler writes a page
+    ("a.go", 'func h(w http.ResponseWriter, r *http.Request) {\n'
+             '\tname := r.URL.Query().Get("name")\n'
+             '\tfmt.Fprintf(w, "<p>%s</p>", name)\n}', [("ARX-XSS", H)]),
     # PHP
     ("a.php", '<?php\n$id = $_GET["id"];\nmysqli_query($conn, "SELECT * FROM u WHERE id=" . $id);', [("ARX-SQLI", C)]),
     ("a.php", '<?php\n$pdo->query("SELECT * FROM t WHERE name = \'{$_POST[\'n\']}\'");', [("ARX-SQLI", C)]),

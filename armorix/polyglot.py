@@ -267,7 +267,8 @@ class Sink:
 
 
 SQL = re.compile(r"\b(select\b[\s\S]*\bfrom|insert\s+into|update\s+[\w.`\"\[\]]+\s+set|delete\s+from|drop\s+table|where\b)", re.IGNORECASE)
-DB_RECEIVER = r"(?i).*\b(db|tx|conn|con|connection|database|sqlx|pool|stmt|statement|jdbc\w*|jdbcTemplate|template|em|entityManager|session|pdo|mysqli|dbh|wpdb|query|builder|repo\w*)\b.*"
+DB_RECEIVER = (r"(?i).*\b(db|tx|conn|con|connection|database|sqlx|pool|st|ps|stmt|pstmt|cstmt|statement|jdbc\w*|jdbcTemplate|"
+               r"template|em|entityManager|session|pdo|mysqli|dbh|wpdb|query|builder|repo\w*)\b.*")
 
 SINKS: dict[str, list[Sink]] = {
     "php": [
@@ -305,9 +306,12 @@ SINKS: dict[str, list[Sink]] = {
         Sink("ARX-SSTI", r"Parse", r".*template\.New\(.*", dynamic=False),
     ],
     "java": [
-        Sink("ARX-SQLI", r"executeQuery|execute|executeUpdate|executeLargeUpdate|addBatch|prepareStatement|prepareCall|nativeSQL|"
-             r"createQuery|createNativeQuery|createSQLQuery|query|queryForObject|queryForList|queryForMap|queryForRowSet|queryForLong|"
-             r"queryForInt|update|batchUpdate", DB_RECEIVER, sql=True),
+        # These names belong to JDBC / JPA / Spring and nothing else, so the receiver may be called anything.
+        Sink("ARX-SQLI", r"executeQuery|executeUpdate|executeLargeUpdate|prepareStatement|prepareCall|nativeSQL|"
+             r"createQuery|createNativeQuery|createSQLQuery|queryForObject|queryForList|queryForMap|queryForRowSet|"
+             r"queryForLong|queryForInt|batchUpdate", None, sql=True),
+        # `execute`, `query` and `update` are ordinary words: only a database-looking receiver counts.
+        Sink("ARX-SQLI", r"execute|addBatch|query|update", DB_RECEIVER, sql=True),
         Sink("ARX-CMDI", r"exec", r".*(?:getRuntime\(\)|runtime|rt)"),
         Sink("ARX-PATH", r"File|FileInputStream|FileOutputStream|FileReader|FileWriter|RandomAccessFile|PrintWriter", "", dynamic=False),
         Sink("ARX-PATH", r"get|of", r"Paths|Path", arg=99, dynamic=False),
@@ -567,6 +571,12 @@ def _special_call(src, taint, call, obj, name, args) -> Finding | None:
             return _report(src, taint, call, "ARX-CMDI", name, via)
         if payload is not rest[0] and taint.is_dynamic_string(payload):
             return _report(src, taint, call, "ARX-CMDI", name, None)
+    # fmt.Fprintf(w, "<p>%s</p>", name) — the usual way a Go handler writes a page.
+    if fam == "go" and obj == "fmt" and name in {"Fprintf", "Fprint", "Fprintln"} and len(args) > 1:
+        if re.fullmatch(r"(?i)w|rw|writer|resp|res|out", text(args[0]).strip()):
+            via = next((v for v in (taint.tainted_by(a) for a in args[1:]) if v), None)
+            if via and not _sanitized("ARX-XSS", call):
+                return _report(src, taint, call, "ARX-XSS", name, via)
     if fam == "java" and name == "ProcessBuilder":
         via = next((v for v in (taint.tainted_by(a) for a in args) if v), None)
         if via:
