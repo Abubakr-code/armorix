@@ -187,6 +187,28 @@ class OpenRedirect(CallSinkRule):
     msg_tainted = "Redirect target comes from `{src}` — attackers can send victims to a phishing site via your domain."
     fix = {"js": "Redirect only to relative paths or an allow-list of URLs.",
            "py": "Validate with url_has_allowed_host_and_scheme() or redirect to url_for(...) routes only."}
+    # "/pet/" + id stays on this host whatever id is; only a bare "/" + id could become "//evil.com".
+    SAME_ORIGIN = re.compile(r"^/[^/\\]")
+
+    def skip(self, src, call, arg):
+        return bool(self.SAME_ORIGIN.match(self._literal_prefix(arg)))
+
+    @staticmethod
+    def _literal_prefix(node) -> str:
+        """The fixed text the target starts with, for `"/a/" + x` and `` `/a/${x}` ``."""
+        while node is not None:
+            if node.type in {"string", "template_string"}:
+                raw = text(node)
+                head = raw[1:]
+                for mark in ("${", "{"):
+                    if mark in head:
+                        head = head.split(mark, 1)[0]
+                return head.rstrip("'\"`")
+            if node.type in {"binary_expression", "binary_operator", "parenthesized_expression"}:
+                node = node.child_by_field_name("left") or (node.named_children[0] if node.named_children else None)
+                continue
+            return ""
+        return ""
 
 
 class NoSqlInjection(Rule):

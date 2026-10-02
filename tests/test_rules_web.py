@@ -39,6 +39,8 @@ VULNERABLE = [
     # NoSQL
     ("a.js", "User.findOne({ email: req.body.email, password: req.body.password });", [("ARX-NOSQL", H)]),
     ("a.js", "const q = req.body;\nUsers.find(q);", [("ARX-NOSQL", H)]),
+    # "/" + input can still become "//evil.com"
+    ("a.js", "app.get('/p', (req, res) => res.redirect('/' + req.query.next));", [("ARX-REDIRECT", M)]),
     # … but declaring text/html keeps the finding
     ("a.js", "function h(req, res) {\n  res.writeHead(200, { 'Content-Type': 'text/html' });\n"
              "  res.end('<p>' + req.url + '</p>');\n}", [("ARX-XSS", H)]),
@@ -89,6 +91,9 @@ SAFE = [
     ("a.py", "app.run(debug=os.environ.get('DEBUG') == '1')"),
     ("a.py", 'img = Image.open(request.files["img"])'),
     ("a.py", 'webbrowser.open(request.args["u"])'),
+    # a literal path prefix pins the redirect to this host
+    ("a.js", "app.get('/p', (req, res) => res.redirect('/pet/' + req.query.id));"),
+    ("a.js", "app.get('/p', (req, res) => res.redirect(`/user/${req.params.id}/edit`));"),
     # a JSON handler cannot reflect script into a page …
     ("a.js", "function h(req, res) {\n  res.writeHead(200, { 'Content-Type': 'application/json' });\n"
              "  res.end(JSON.stringify({ q: req.url }));\n}"),
