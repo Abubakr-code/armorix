@@ -124,8 +124,10 @@ def call_parts(node: Node) -> tuple[str, str, list[Node]]:
 
 
 class PolyAnalyzer(Analyzer):
-    def __init__(self, src: SourceFile):
+    def __init__(self, src: SourceFile, inherited: dict[str, tuple[str, int]] | None = None):
         fam = src.family
+        # {name: (file, line)} — PHP names another file filled from a superglobal; see crossfile.py.
+        self.inherited = inherited or {}
         self.name_types = NAMES[fam]
         self.function_types = FUNCTIONS[fam]
         self.declares = DECLARES[fam]
@@ -199,6 +201,12 @@ class PolyAnalyzer(Analyzer):
 
     # frameworks
     def _framework_sources(self):
+        # PHP include shares one variable scope, so a name this file never binds holds whatever
+        # the file on the other side of the include put there (see crossfile.py).
+        for name, (where, line) in self.inherited.items():
+            self.tainted.setdefault((0, f"${name}"),
+                                    Origin(1, f"${name} is filled from the request in {where}:{line}",
+                                           via=None, source=f"${name} (set in {where}:{line})"))
         controller = "Controller" in self.src.path.name or "/Controllers/" in self.src.rel
         for fns in self.functions.values():
             for fn in fns:

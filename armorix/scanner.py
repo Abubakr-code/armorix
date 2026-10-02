@@ -5,6 +5,7 @@ Big projects are analysed in parallel worker processes; unchanged files come fro
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import time
@@ -22,7 +23,7 @@ from .finding import Finding, Severity
 from .parsing import GRAMMARS, load
 from .project import ProjectConfig, assign_fingerprints, file_ignored, load_config, read_baseline, suppressed
 from .rules import ALL_RULES, TEXT_FILES
-from . import polyglot
+from . import crossfile, embedded, polyglot
 from .polyglot import POLY_FAMILIES, PolyAnalyzer
 from .taint import TAINT_FAMILIES, Analyzer
 
@@ -87,14 +88,16 @@ def discover(root: Path, want=_wanted, config: ProjectConfig | None = None) -> l
     return sorted(found)
 
 
-def analyze_file(path: Path, rel: str, disabled: frozenset[str] = frozenset()) -> dict:
+def analyze_file(path: Path, rel: str, disabled: frozenset[str] = frozenset(),
+                 php_sources: dict | None = None) -> dict:
     """Everything the scanner needs from one file, as plain data (runs in worker processes)."""
     src = load(path, rel)
     out = {"lines": len(src.lines), "family": src.family if src.grammar else None, "findings": [], "suppressed": 0}
     if file_ignored(src.lines) or vendored(src):
         return out
     poly = src.tree is not None and src.family in POLY_FAMILIES
-    taint = (PolyAnalyzer(src) if poly else Analyzer(src)) if src.tree is not None and (poly or src.family in TAINT_FAMILIES) else None
+    inherited = crossfile.inherited_for(src.text, rel, php_sources) if php_sources and src.family == "php" else None
+    taint = (PolyAnalyzer(src, inherited) if poly else Analyzer(src)) if src.tree is not None and (poly or src.family in TAINT_FAMILIES) else None
     seen = set()
     for rule in ALL_RULES:
         if rule.id in disabled or ("*" not in rule.families and src.family not in rule.families):
@@ -109,6 +112,22 @@ def analyze_file(path: Path, rel: str, disabled: frozenset[str] = frozenset()) -
                 out["suppressed"] += 1
                 continue
             out["findings"].append(f.to_dict())
+    if src.family == "php":
+        # A <script> block inside the page is JavaScript the PHP parser never looks at.
+        page = embedded.inline_js(src)
+        if page is not None:
+            page_taint = Analyzer(page)
+            for rule in ALL_RULES:
+                if rule.id in disabled or "js" not in rule.families or not rule.wants(page):
+                    continue
+                for f in rule.check(page, page_taint):
+                    if f.key in seen:
+                        continue
+                    seen.add(f.key)
+                    if suppressed(f, src.lines):
+                        out["suppressed"] += 1
+                        continue
+                    out["findings"].append(f.to_dict())
     if poly:  # PHP / Go / Java: one table-driven pass over the language's sinks
         for f in polyglot.check(src, taint, disabled):
             if f.key in seen:
@@ -144,11 +163,12 @@ def vendored(src) -> bool:
     return len(src.lines) > 600 and bool(VENDOR_BANNER.search(head)) and not src.rel.startswith(("src/", "app/", "lib/", "server/"))
 
 
-def _analyze_batch(batch: list[tuple[str, str]], disabled: frozenset[str]) -> list[tuple[str, dict | None, str | None]]:
+def _analyze_batch(batch: list[tuple[str, str]], disabled: frozenset[str],
+                   php_sources: dict | None = None) -> list[tuple[str, dict | None, str | None]]:
     results = []
     for path, rel in batch:
         try:
-            results.append((rel, analyze_file(Path(path), rel, disabled), None))
+            results.append((rel, analyze_file(Path(path), rel, disabled, php_sources), None))
         except Exception as exc:  # a parser crash in one file must not stop the scan
             results.append((rel, None, f"{rel}: {exc.__class__.__name__}: {exc}"))
     return results
@@ -177,6 +197,12 @@ def scan(target: str | Path, deps: bool = True, db: OsvDb | None = None, progres
     files = discover(root, config=config)
     jobs: list[tuple[Path, str]] = [(p, p.relative_to(base).as_posix()) for p in files]
 
+    # PHP include shares one variable scope, so the flow often starts in another file: read the
+    # project once for names filled from a superglobal, before any file is analysed on its own.
+    php = [(p, rel) for p, rel in jobs if p.suffix.lower() in {".php", ".phtml", ".inc"}]
+    php_sources = crossfile.php_sources(php) if php else None
+    php_salt = hashlib.sha256(repr(sorted(php_sources.items())).encode()).hexdigest()[:12] if php_sources else ""
+
     # cache lookup
     cache = ResultCache() if use_cache else None
     keys: dict[str, str] = {}
@@ -184,7 +210,8 @@ def scan(target: str | Path, deps: bool = True, db: OsvDb | None = None, progres
     if cache and cache.con:
         for path, rel in jobs:
             try:
-                keys[rel] = file_key(rel, path.read_bytes(), disabled)
+                extra = php_salt if (php_sources and path.suffix.lower() in {".php", ".phtml", ".inc"}) else ""
+                keys[rel] = file_key(rel + extra, path.read_bytes(), disabled)
             except OSError:
                 pass
         by_key = cache.get_many(list(keys.values()))
@@ -211,7 +238,7 @@ def scan(target: str | Path, deps: bool = True, db: OsvDb | None = None, progres
         batches = [todo[i:i + size] for i in range(0, len(todo), size)]
         try:
             with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as pool:
-                pending = {pool.submit(_analyze_batch, b, disabled) for b in batches}
+                pending = {pool.submit(_analyze_batch, b, disabled, php_sources) for b in batches}
                 while pending:
                     if stop():
                         for fut in pending:
@@ -227,12 +254,12 @@ def scan(target: str | Path, deps: bool = True, db: OsvDb | None = None, progres
                     continue
                 if stop():
                     break
-                take(_analyze_batch([item], disabled))
+                take(_analyze_batch([item], disabled, php_sources))
     else:
         for item in todo:
             if stop():
                 break
-            take(_analyze_batch([item], disabled))
+            take(_analyze_batch([item], disabled, php_sources))
 
     if cache:
         cache.put_many({keys[rel]: data for rel, data in fresh.items() if rel in keys})

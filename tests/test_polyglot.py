@@ -17,6 +17,9 @@ def run(tmp_path, name, code):
 
 
 VULNERABLE = [
+    # PHP setcookie(): the 6th and 7th arguments are secure and httponly
+    ("a.php", '<?php\nsetcookie("sessionId", $v);', [("ARX-COOKIE", M)]),
+    ("a.php", '<?php\nsetcookie("auth_token", $v, time()+3600, "/", $h, false, false);', [("ARX-COOKIE", M)]),
     # a JDBC method name is distinctive enough that the receiver may be called anything
     ("A.java", 'void h(HttpServletRequest req) throws Exception {\n'
                '  String id = req.getParameter("id");\n'
@@ -111,6 +114,8 @@ VULNERABLE = [
 ]
 
 SAFE = [
+    # both flags passed → nothing to report
+    ("a.php", '<?php\nsetcookie("sessionId", $v, time()+3600, "/", $h, true, true);', "ARX-COOKIE"),
     ("a.php", '<?php\n$id = intval($_GET["id"]);\nmysqli_query($conn, "SELECT * FROM u WHERE id=" . $id);', "ARX-SQLI-CRIT"),
     ("a.php", '<?php\necho htmlspecialchars($_GET["name"], ENT_QUOTES);', "ARX-XSS"),
     ("a.php", '<?php\necho esc_html( $_GET["name"] );', "ARX-XSS"),

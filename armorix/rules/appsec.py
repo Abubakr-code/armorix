@@ -113,6 +113,7 @@ class InsecureCookie(Rule):
     cwe = "CWE-1004"
     title = "Session cookie without HttpOnly / Secure"
     description = "A session or auth cookie can be read by JavaScript (stolen via XSS) or sent over plain HTTP."
+    families = ("js", "py", "php")
     FIX = "Set httpOnly: true, secure: true and sameSite: 'lax' (or 'strict') on session and token cookies."
     SESSIONISH = re.compile(r"(?i)sess|token|auth|jwt|sid\b|remember|login")
     COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
@@ -152,6 +153,22 @@ class InsecureCookie(Rule):
                     out.append(finding(self, src, call, Severity.MEDIUM,
                                        f"Cookie {text(a[0])} is set without {' and '.join(missing)}=True.",
                                        "Pass httponly=True, secure=True, samesite='Lax' to set_cookie()."))
+        if src.family == "php":
+            for call in calls(src):
+                if callee(call)[1] != "setcookie":
+                    continue
+                a = args(call)
+                if not a or not self.SESSIONISH.search(text(a[0])):
+                    continue
+                # setcookie($name, $value, $expires, $path, $domain, $secure, $httponly)
+                secure = text(a[5]).strip().lower() if len(a) > 5 else "false"
+                httponly = text(a[6]).strip().lower() if len(a) > 6 else "false"
+                missing = [flag for flag, v in (("secure", secure), ("httponly", httponly)) if v in {"false", "0", "''", '""', "null"}]
+                if missing:
+                    out.append(finding(self, src, call, Severity.MEDIUM,
+                                       f"Session cookie {text(a[0])} is sent without {' and '.join(missing)} — "
+                                       "readable by JavaScript and sent over plain HTTP.",
+                                       "setcookie($n, $v, ['secure' => true, 'httponly' => true, 'samesite' => 'Lax']);"))
         if src.family == "py":
             for node in src.nodes:
                 if node.type == "assignment" or (node.type == "pair"):
