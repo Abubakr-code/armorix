@@ -311,6 +311,13 @@ RULES.update({
                "Сравнивайте значение целиком: `url === allowed`, либо разберите URL и сравните origin (`new URL(url).origin === allowed`)."),
         "en": ("Allow-list checked with a substring match", "", ""),
     },
+    "ARX-XPATH": {
+        "uz": ("XPath in'ektsiyasi", "XPath ifodasi foydalanuvchi kiritmasidan qurilyapti — bitta qo'shtirnoq so'rovni o'zgartiradi (login chetlab o'tish, ma'lumot sizishi). SQL in'ektsiyaning XML'dagi egizagi.",
+               "Qiymatni XPath o'zgaruvchisi sifatida bering: tree.xpath(\"//user[name=$n]\", n=name), yoki avval ruxsat ro'yxati bilan tekshiring."),
+        "ru": ("XPath-инъекция", "XPath-выражение собирается из пользовательского ввода — одна кавычка меняет запрос (обход входа, утечка данных). Близнец SQL-инъекции в XML.",
+               "Передавайте значение как переменную XPath: tree.xpath(\"//user[name=$n]\", n=name), или проверяйте по белому списку."),
+        "en": ("XPath injection", "", ""),
+    },
     "ARX-AUTOESCAPE": {
         "uz": ("Shablonda avtomatik ekranlash o'chirilgan", "HTML shablonlar o'zgaruvchilarni ekranlamasdan chiqaryapti — har qanday foydalanuvchi qiymati XSS'ga aylanadi.",
                "Avtomatik ekranlashni yoqilgan holda qoldiring va faqat tozalangan, ishonchli HTML'ni safe deb belgilang."),

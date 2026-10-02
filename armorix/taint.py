@@ -398,6 +398,12 @@ class Analyzer:
         if parent.type in {"assignment_expression", "assignment"}:
             left = text(parent.child_by_field_name("left"))
             return left.rsplit(".", 1)[-1]
+        # `HOST, PORT, FETCH = "…", 80, lambda url: urlopen(url)` — the name at the same position
+        if parent.type in self.TUPLES and parent.parent is not None and parent.parent.type in {"assignment", "assignment_expression"}:
+            pairs = self._paired(parent.parent.child_by_field_name("left"), parent)
+            for target, value in pairs or []:
+                if value.id == fn.id:
+                    return text(target).rsplit(".", 1)[-1]
         return None
 
     def _params(self, fn: Node) -> list[list[tuple[str, Node]]]:

@@ -146,6 +146,7 @@ Findings appear as annotations on the pull request diff and as a table in the jo
 | ARX-C-FMT | CWE-134 | format string taken from input |
 | ARX-C-INTOVF | CWE-190 | integer overflow in an allocation size |
 | ARX-C-CMDI | CWE-78 | `system()` / `popen()` built from input |
+| ARX-XPATH | CWE-643 | XPath expressions built from input (lxml `.xpath`, `document.evaluate`, DOMXPath, javax.xml.xpath) |
 | ARX-DEP | CWE-1395 | dependency versions with known CVEs (OSV / GHSA), known-malicious packages |
 
 ## Desktop app

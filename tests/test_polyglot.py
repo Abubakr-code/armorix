@@ -17,6 +17,8 @@ def run(tmp_path, name, code):
 
 
 VULNERABLE = [
+    # DOMXPath: the receiver can be called anything, the expression shape decides
+    ("a.php", '<?php\n$n = $_GET["n"];\n$x = new DOMXPath($doc);\n$r = $x->query("//user[name=\'$n\']");\n', [("ARX-XPATH", H)]),
     ("a.php", '<?php\n$row = mysqli_fetch_assoc($res);\nsystem("convert " . $row["file"]);\n', [("ARX-CMDI", H)]),
     # stored XSS: the row holds whatever a user put there earlier
     ("a.php", '<?php\nwhile ($row = mysqli_fetch_row($res)) {\n'
@@ -123,6 +125,8 @@ VULNERABLE = [
 ]
 
 SAFE = [
+    # PDO's query() takes SQL, not XPath — even in a file that also uses DOMXPath
+    ("a.php", '<?php\n$x = new DOMXPath($doc);\n$id = intval($_GET["id"]);\n$pdo->query("SELECT * FROM t WHERE id = $id");\n', "ARX-XPATH"),
     # escaped on the way out, and used somewhere a row is not second-hand input
     ("a.php", '<?php\nwhile ($row = mysqli_fetch_row($res)) {\n'
               '  echo "<div>" . htmlspecialchars($row[0], ENT_QUOTES) . "</div>";\n}\n', "ARX-XSS"),

@@ -422,3 +422,20 @@ class SubstringAllowlist(Rule):
                 names = [n for n in walk(params) if n.type == "identifier"]
                 return text(names[0]) if names else None
         return None
+
+
+class XpathInjection(CallSinkRule):
+    id = "ARX-XPATH"
+    cwe = "CWE-643"
+    title = "XPath injection"
+    description = "An XPath expression is built from untrusted input, so a quote rewrites the query — the XML twin of SQL injection."
+    sinks = {
+        "py": {(None, "xpath"), (None, "XPath"), ("etree", "XPath"), ("lxml.etree", "XPath"), (None, "XPathEvaluator")},
+        "js": {("document", "evaluate"), ("xpath", "select"), ("xpath", "select1"), ("xpath", "evaluate"),
+               ("xpath", "parse"), (None, "selectNodes"), (None, "selectSingleNode")},
+    }
+    tainted = Severity.HIGH
+    dynamic = None  # expressions built from constants are everywhere; only a proven flow is worth a finding
+    msg_tainted = "Untrusted input `{src}` is placed inside an XPath expression — a quote changes what it selects (login bypass, data leak)."
+    fix = {"py": "Pass the value as an XPath variable: tree.xpath(\"//user[name=$n]\", n=name).",
+           "js": "Use a parameterised evaluation (xpath variables / a resolver), or allow-list the value before building the expression."}

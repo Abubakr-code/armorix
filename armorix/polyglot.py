@@ -306,6 +306,8 @@ DB_RECEIVER = (r"(?i).*\b(db|tx|conn|con|connection|database|sqlx|pool|st|ps|stm
 
 SINKS: dict[str, list[Sink]] = {
     "php": [
+        Sink("ARX-XPATH", r"query|evaluate", r"(?i).*xpath.*", dynamic=False),
+        Sink("ARX-XPATH", r"xpath", None, dynamic=False),
         Sink("ARX-SQLI", r"mysqli_query|mysqli_real_query|mysqli_multi_query", "", arg=1, sql=True),
         Sink("ARX-SQLI", r"mysql_query|pg_query|pg_send_query|sqlite_query|mssql_query|odbc_exec|db2_exec|oci_parse", "", arg=-1, sql=True),
         Sink("ARX-SQLI", r"query|exec|prepare|multi_query|real_query|get_results|get_row|get_var|get_col|raw|whereRaw|orWhereRaw|havingRaw|"
@@ -340,6 +342,7 @@ SINKS: dict[str, list[Sink]] = {
         Sink("ARX-SSTI", r"Parse", r".*template\.New\(.*", dynamic=False),
     ],
     "java": [
+        Sink("ARX-XPATH", r"evaluate|compile|evaluateExpression", r"(?i).*xpath.*", dynamic=False),
         # These names belong to JDBC / JPA / Spring and nothing else, so the receiver may be called anything.
         Sink("ARX-SQLI", r"executeQuery|executeUpdate|executeLargeUpdate|prepareStatement|prepareCall|nativeSQL|"
              r"createQuery|createNativeQuery|createSQLQuery|queryForObject|queryForList|queryForMap|queryForRowSet|"
@@ -398,6 +401,7 @@ IMPACT = {
     "ARX-DESER": ("is deserialized — attacker-controlled objects lead to code execution.", ""),
     "ARX-SSTI": ("is compiled as a template — server-side code execution.", ""),
     "ARX-LFI": ("chooses the file that is included and executed — local / remote file inclusion.", "a file is included from a non-constant path."),
+    "ARX-XPATH": ("is placed inside an XPath expression — a quote changes what it selects.", "an XPath expression is built at runtime."),
 }
 FIXES = {
     ("ARX-SQLI", "php"): "Use a prepared statement with the driver the code already uses: mysqli_prepare($conn, '… WHERE id = ?') + "
@@ -427,6 +431,8 @@ FIXES = {
     ("ARX-SSTI", "php"): "Render template files only and pass user data as variables.",
     ("ARX-SSTI", "go"): "Parse templates from files at startup; pass user data only as template data.",
     ("ARX-LFI", "php"): "Include only fixed files: map the user's choice to an allow-list (['home' => 'home.php']) instead of building the path.",
+    ("ARX-XPATH", "php"): "Allow-list or strictly validate the value before it goes into the expression; DOMXPath has no bound parameters.",
+    ("ARX-XPATH", "java"): "Bind the value with XPathVariableResolver and reference it as $name in the expression.",
 }
 RULES = {r.id: r for r in ALL_RULES}
 
@@ -666,6 +672,14 @@ def _special_call(src, taint, call, obj, name, args) -> Finding | None:
             return _report(src, taint, call, "ARX-CMDI", name, via)
         if payload is not rest[0] and taint.is_dynamic_string(payload):
             return _report(src, taint, call, "ARX-CMDI", name, None)
+    # $x = new DOMXPath($doc); $x->query("//user[name='$n']") — the receiver can be called anything,
+    # so the expression itself has to look like XPath (PDO's query() takes SQL, which never starts with /).
+    if fam == "php" and name in {"query", "evaluate"} and args and "DOMXPath" in src.text:
+        expr = text(args[0]).lstrip("\"'(")
+        if expr.startswith(("/", "./", "../")) or "//" in expr[:40] or "[@" in expr:
+            via = taint.tainted_by(args[0])
+            if via:
+                return _report(src, taint, call, "ARX-XPATH", name, via)
     # fmt.Fprintf(w, "<p>%s</p>", name) — the usual way a Go handler writes a page.
     if fam == "go" and obj == "fmt" and name in {"Fprintf", "Fprint", "Fprintln"} and len(args) > 1:
         if re.fullmatch(r"(?i)w|rw|writer|resp|res|out", text(args[0]).strip()):

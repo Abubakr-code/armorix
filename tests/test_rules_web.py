@@ -17,6 +17,9 @@ def run(tmp_path, name, code):
 
 
 VULNERABLE = [
+    # XPath built from input
+    ("a.py", "def v():\n    return tree.xpath(\".//user[name='%s']\" % request.args['n'])", [("ARX-XPATH", H)]),
+    ("a.js", "app.get('/u', (req, res) => xpath.select(\"//user[name='\" + req.query.n + \"']\", doc))", [("ARX-XPATH", H)]),
     # the requester's own record, found by their session token, holds fields they wrote — Juice Shop's SSTI
     ("a.js", "app.get('/p', async (req, res) => {\n  const me = sessions.get(req.cookies.token)\n"
              "  const tpl = page.replace('_name_', me.username)\n  res.send(pug.compile(tpl)())\n})", [("ARX-SSTI", C), ("ARX-XSS", H)]),
@@ -128,6 +131,8 @@ SAFE = [
              "    if not full.startswith(BASE):\n        abort(403)\n    return open(full).read()"),
     # input as a value of the template is ordinary formatting
     ("a.py", "def v():\n    return 'Hello {}'.format(request.args['n'])"),
+    # an XPath variable instead of string building
+    ("a.py", "def v():\n    return tree.xpath('.//user[name=$n]', n=request.args['n'])"),
     # comparing the whole value, and a list that is not an allow-list
     ("a.js", "for (const allowedUrl of redirectAllowlist) {\n  ok = ok || url === allowedUrl\n}"),
     ("a.js", "for (const w of searchWords) {\n  hit = hit || title.includes(w)\n}"),
@@ -161,7 +166,7 @@ def test_no_false_positive(tmp_path, name, code):
 
 def test_every_rule_is_documented():
     ids = [r.id for r in ALL_RULES]
-    assert len(ids) == len(set(ids)) == 41
+    assert len(ids) == len(set(ids)) == 42
     for rule in ALL_RULES:
         assert rule.cwe.startswith("CWE-") and rule.title and rule.description, rule.id
 
