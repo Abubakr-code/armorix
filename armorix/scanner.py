@@ -24,6 +24,7 @@ from .parsing import GRAMMARS, load
 from .project import ProjectConfig, assign_fingerprints, file_ignored, load_config, read_baseline, suppressed
 from .rules import ALL_RULES, TEXT_FILES
 from . import crossfile, embedded, polyglot
+from .rules.infra import line_finding
 from .polyglot import POLY_FAMILIES, PolyAnalyzer
 from .taint import TAINT_FAMILIES, Analyzer
 
@@ -115,6 +116,18 @@ def analyze_file(path: Path, rel: str, disabled: frozenset[str] = frozenset(),
                 out["suppressed"] += 1
                 continue
             out["findings"].append(f.to_dict())
+    if path.suffix.lower() in {".vue", ".svelte"} and "ARX-XSS" not in disabled:
+        xss = next(r for r in ALL_RULES if r.id == "ARX-XSS")
+        for line, expr, syntax in embedded.raw_html_bindings(src):
+            f = line_finding(xss, src, line, Severity.MEDIUM,
+                             f"`{syntax}` renders `{expr[:60]}` as raw HTML — escaping is off, so any user data in it runs as script.",
+                             "Render it as text ({{ value }}), or pass it through DOMPurify.sanitize() first.")
+            if f.key not in seen:
+                seen.add(f.key)
+                if suppressed(f, src.lines):
+                    out["suppressed"] += 1
+                else:
+                    out["findings"].append(f.to_dict())
     if src.family in {"php", "py"} or path.suffix.lower() in PAGE_SUFFIXES:
         # A <script> block inside a page (or inside a Python string holding one) is JavaScript the
         # file's own parser never looks at.

@@ -124,3 +124,13 @@ def test_a_script_inside_a_python_string_keeps_its_line_numbers(tmp_path):
     write(tmp_path, {"app.py": 'PAGE = "<script>alert(\\"hi\\"); document.write(location.hash);</script>"\n'})
     found = [f for f in scan(tmp_path, deps=False).findings if f.rule_id == "ARX-XSS"]
     assert found and found[0].line == 1
+
+
+def test_vue_and_svelte_raw_html_bindings(tmp_path):
+    write(tmp_path, {
+        "C.vue": '<template>\n  <div v-html="article.body"></div>\n  <div v-html="DOMPurify.sanitize(article.body)"></div>\n'
+                 "  <p v-html=\"'<b>fixed</b>'\"></p>\n</template>\n",
+        "B.svelte": "<script>export let bio;</script>\n<div>{@html bio}</div>\n",
+    })
+    found = sorted((f.file, f.line) for f in scan(tmp_path, deps=False).findings if f.rule_id == "ARX-XSS")
+    assert found == [("B.svelte", 2), ("C.vue", 2)]

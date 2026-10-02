@@ -45,3 +45,21 @@ def inline_js(src: SourceFile) -> SourceFile | None:
     text = "".join(blank)
     return SourceFile(path=src.path, rel=src.rel, text=text, grammar="javascript",
                       tree=_parser("javascript").parse(text.encode("utf-8")), lines=src.lines)
+
+
+# Raw-HTML bindings in component templates: Vue's v-html and Svelte's {@html} switch the framework's
+# escaping off for one expression. (Angular's [innerHTML] is still sanitised, so it is not one of them.)
+RAW_BINDING = re.compile(r"""\bv-html\s*=\s*(["'])(?P<vue>.*?)\1|\{@html\s+(?P<svelte>[^}]+)\}""", re.DOTALL)
+CLEANED = re.compile(r"DOMPurify|sanitize|purify|escape", re.IGNORECASE)
+
+
+def raw_html_bindings(src: SourceFile):
+    """(line, expression, syntax) for every raw-HTML binding whose expression is not a plain string."""
+    out = []
+    for m in RAW_BINDING.finditer(src.text):
+        expr = (m.group("vue") if m.group("vue") is not None else m.group("svelte") or "").strip()
+        if not expr or CLEANED.search(expr) or re.fullmatch(r"""(['"`]).*\1""", expr, re.DOTALL):
+            continue
+        line = src.text.count("\n", 0, m.start()) + 1
+        out.append((line, expr, "v-html" if m.group("vue") is not None else "{@html}"))
+    return out
