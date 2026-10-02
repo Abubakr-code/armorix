@@ -11,9 +11,12 @@ from .base import Rule
 from .secrets import match_secret
 
 
-def line_finding(rule: Rule, src: SourceFile, line: int, severity: Severity, message: str, fix: str, column: int = 1) -> Finding:
+def line_finding(rule: Rule, src: SourceFile, line: int, severity: Severity, message: str, fix: str, column: int = 1,
+                 fix_key: str = "") -> Finding:
+    """`fix_key` names a translated variant of the fix when the rule has more than one (see i18n.FIX_VARIANTS)."""
     return Finding(rule_id=rule.id, cwe=rule.cwe, severity=severity, title=rule.title, message=message, fix=fix,
-                   file=src.rel, line=line, column=column, snippet=src.line(line))
+                   file=src.rel, line=line, column=column, snippet=src.line(line),
+                   data={"fix_key": fix_key} if fix_key else {})
 
 
 def _is_workflow(src: SourceFile) -> bool:

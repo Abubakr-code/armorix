@@ -88,10 +88,13 @@ class ReflectedXss(CallSinkRule):
             here = ("Angular escapes values by default; bypassSecurityTrust… turns that off. Bind the value normally, "
                     "or pass it through DomSanitizer.sanitize(SecurityContext.HTML, value) first.") if bypass else fix
             if via:
-                out.append(finding(self, src, node, Severity.HIGH,
-                                   f"Untrusted input `{taint.root(via)}` is "
-                                   + ("handed to Angular as already-trusted HTML (DOM XSS)." if bypass
-                                      else "inserted as HTML (DOM XSS)."), here, taint, via))
+                f = finding(self, src, node, Severity.HIGH,
+                            f"Untrusted input `{taint.root(via)}` is "
+                            + ("handed to Angular as already-trusted HTML (DOM XSS)." if bypass
+                               else "inserted as HTML (DOM XSS)."), here, taint, via)
+                if bypass:
+                    f.data["fix_key"] = "angular"
+                out.append(f)
             elif value.type not in {"number", "true", "false"}:
                 out.append(finding(self, src, node, Severity.MEDIUM,
                                    "A non-constant value is inserted as raw HTML — safe only if it can never contain user data.", here))

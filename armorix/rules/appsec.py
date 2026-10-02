@@ -180,10 +180,12 @@ class InsecureCookie(Rule):
                 httponly = text(a[6]).strip().lower() if len(a) > 6 else "false"
                 missing = [flag for flag, v in (("secure", secure), ("httponly", httponly)) if v in {"false", "0", "''", '""', "null"}]
                 if missing:
-                    out.append(finding(self, src, call, Severity.MEDIUM,
-                                       f"Session cookie {text(a[0])} is sent without {' and '.join(missing)} — "
-                                       "readable by JavaScript and sent over plain HTTP.",
-                                       "setcookie($n, $v, ['secure' => true, 'httponly' => true, 'samesite' => 'Lax']);"))
+                    f = finding(self, src, call, Severity.MEDIUM,
+                                f"Session cookie {text(a[0])} is sent without {' and '.join(missing)} — "
+                                "readable by JavaScript and sent over plain HTTP.",
+                                "setcookie($n, $v, ['secure' => true, 'httponly' => true, 'samesite' => 'Lax']);")
+                    f.data["fix_key"] = "php"
+                    out.append(f)
         if src.family == "py":
             for node in src.nodes:
                 if node.type == "assignment" or (node.type == "pair"):

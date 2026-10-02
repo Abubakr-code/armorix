@@ -476,6 +476,26 @@ def severity(lang: str, sev: Severity) -> str:
     return SEVERITY[lang][sev]
 
 
+# One rule can have two genuinely different fixes. The rule-level translation covers the common
+# case; a finding that needs its own says so with data["fix_key"], and loses nothing in uz / ru.
+FIX_VARIANTS = {
+    ("ARX-CSP", "xss_header"): {
+        "uz": "Sarlavhani olib tashlang (zamonaviy brauzerlar uni e'tiborsiz qoldiradi) — ekranlash va haqiqiy CSP yetarli.",
+        "ru": "Уберите заголовок (современные браузеры его игнорируют) — достаточно экранирования и настоящего CSP.",
+    },
+    ("ARX-COOKIE", "php"): {
+        "uz": "setcookie($n, $v, ['secure' => true, 'httponly' => true, 'samesite' => 'Lax']);",
+        "ru": "setcookie($n, $v, ['secure' => true, 'httponly' => true, 'samesite' => 'Lax']);",
+    },
+    ("ARX-XSS", "angular"): {
+        "uz": "Angular qiymatlarni o'zi ekranlaydi; bypassSecurityTrust… buni o'chiradi. Qiymatni oddiy bog'lang "
+              "yoki avval DomSanitizer.sanitize(SecurityContext.HTML, value) dan o'tkazing.",
+        "ru": "Angular экранирует значения сам; bypassSecurityTrust… это отключает. Привяжите значение обычным "
+              "способом или пропустите через DomSanitizer.sanitize(SecurityContext.HTML, value).",
+    },
+}
+
+
 def localize(f: Finding, lang: str) -> tuple[str, str, str]:
     """(title, message, fix) for display. English keeps the rule's own, more specific wording."""
     if lang == "en":
@@ -488,6 +508,9 @@ def localize(f: Finding, lang: str) -> tuple[str, str, str]:
         return t["title"], t["msg"].format(**d), fix
     title, why, fix = RULES.get(f.rule_id, {}).get(lang, (f.title, f.message, f.fix))
     fix = fix or f.fix  # AI-review fixes are generic English templates when no translation exists
+    variant = FIX_VARIANTS.get((f.rule_id, f.data.get("fix_key", "")), {}).get(lang)
+    if variant:
+        fix = variant
     if f.data.get("source"):
         why = f"{why} {ui(lang, 'from', src=f.data['source'])}"
     return title, why, fix

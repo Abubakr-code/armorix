@@ -52,3 +52,21 @@ def test_detect(monkeypatch):
     assert i18n.detect("uz") == "uz"
     monkeypatch.setenv("LANG", "de_DE.UTF-8")
     assert i18n.detect() == "en"
+
+
+def test_a_finding_with_its_own_fix_keeps_it_in_every_language(tmp_path):
+    """One rule, two different fixes: the Uzbek reader must get the right one, not the rule's default."""
+    from armorix import i18n
+    from armorix.scanner import scan
+    (tmp_path / "a.php").write_text('<?php\nheader("X-XSS-Protection: 0");\n', encoding="utf-8")
+    f = next(x for x in scan(tmp_path, deps=False).findings if x.rule_id == "ARX-CSP")
+    for lang in ("uz", "ru"):
+        _, _, fix = i18n.localize(f, lang)
+        assert fix == i18n.FIX_VARIANTS[("ARX-CSP", "xss_header")][lang]
+        assert "nonce" not in fix  # the CSP-policy advice belongs to the other case
+
+
+def test_every_fix_variant_is_translated():
+    from armorix import i18n
+    for key, langs in i18n.FIX_VARIANTS.items():
+        assert set(langs) == {"uz", "ru"}, key

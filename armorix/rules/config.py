@@ -208,7 +208,8 @@ class WeakCsp(Rule):
             if self.XSS_HEADER.search(raw):
                 out.append(line_finding(self, src, i, Severity.LOW,
                                         "`X-XSS-Protection: 0` switches the browser's own reflected-XSS filter off.",
-                                        "Remove the header (modern browsers ignore it) and rely on escaping plus a real CSP."))
+                                        "Remove the header (modern browsers ignore it) and rely on escaping plus a real CSP.",
+                                        fix_key="xss_header"))
         return out
 
 
