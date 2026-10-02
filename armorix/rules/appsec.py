@@ -8,6 +8,7 @@ import re
 from ..finding import Severity
 from ..parsing import text
 from .base import FUNCTION_TYPES, CallSinkRule, Rule, args, callee, calls, finding, kwarg
+from .infra import line_finding
 
 JS_BODY = re.compile(r"^(?:req|request|ctx(?:\.request)?)\.body$")
 PY_BODY = re.compile(r"^request\.(?:json|form|data|POST|get_json\(\s*\)|values)$")
@@ -115,8 +116,18 @@ class InsecureCookie(Rule):
     description = "A session or auth cookie can be read by JavaScript (stolen via XSS) or sent over plain HTTP."
     families = ("js", "py", "php")
     FIX = "Set httpOnly: true, secure: true and sameSite: 'lax' (or 'strict') on session and token cookies."
-    SESSIONISH = re.compile(r"(?i)sess|token|auth|jwt|sid\b|remember|login")
+    # A cookie name is made of words joined by `_`, `-` or a capital letter, so the humps are
+    # split first and the word matched whole: "auth_token" and "dvwaSession" are session cookies,
+    # "comment_author" is not — a plain \b cannot tell them apart.
+    CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+    SESSIONISH = re.compile(r"(?i)(?<![a-z0-9])(?:sess\w*|tokens?|auth|jwt|sid|remember(?:_me)?|login)(?![a-z0-9])")
+    # setcookie($n, '', time() - YEAR, …) deletes the cookie; flags are meaningless on a deletion.
+    DELETION = re.compile(r"""^\s*(?:''|""|'\s+'|"\s+"|null|false)\s*$""", re.IGNORECASE)
+    PAST = re.compile(r"time\s*\(\s*\)\s*-|^\s*-?\s*\d{1,6}\s*$|strtotime\s*\(\s*['\"]-")
     COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
+
+    def _sessionish(self, name: str) -> bool:
+        return bool(self.SESSIONISH.search(self.CAMEL.sub("_", name)))
 
     def check(self, src, taint):
         out = []
@@ -124,7 +135,7 @@ class InsecureCookie(Rule):
             obj, name = callee(call)
             a = args(call)
             if src.family == "js" and name == "cookie" and obj in {"res", "response", "reply", "ctx.cookies"} and a:
-                if not self.SESSIONISH.search(text(a[0])):
+                if not self._sessionish(text(a[0])):
                     continue
                 opts = text(a[2]) if len(a) > 2 else ""
                 missing = [flag for flag in ("httpOnly", "secure") if not re.search(rf"{flag}\s*:\s*true", opts)]
@@ -146,7 +157,7 @@ class InsecureCookie(Rule):
                                            f"Session cookie never sets {' or '.join(absent)} — Express defaults to a cookie "
                                            "readable by JavaScript and sent over plain HTTP.", self.FIX))
             elif src.family == "py" and name == "set_cookie" and a:
-                if not self.SESSIONISH.search(text(a[0])):
+                if not self._sessionish(text(a[0])):
                     continue
                 missing = [flag for flag in ("httponly", "secure") if (kwarg(call, flag) is None or text(kwarg(call, flag)) != "True")]
                 if missing:
@@ -158,7 +169,11 @@ class InsecureCookie(Rule):
                 if callee(call)[1] != "setcookie":
                     continue
                 a = args(call)
-                if not a or not self.SESSIONISH.search(text(a[0])):
+                if not a or not self._sessionish(text(a[0])):
+                    continue
+                if len(a) > 1 and self.DELETION.match(text(a[1])):
+                    continue
+                if len(a) > 2 and self.PAST.search(text(a[2])):
                     continue
                 # setcookie($name, $value, $expires, $path, $domain, $secure, $httponly)
                 secure = text(a[5]).strip().lower() if len(a) > 5 else "false"
@@ -326,11 +341,38 @@ class CsrfExempt(Rule):
     cwe = "CWE-352"
     title = "CSRF protection disabled"
     description = "A view that changes state accepts requests from any website, so a malicious page can act as the logged-in user."
-    families = ("py", "js")
+    families = ("py", "js", "php")
+    # A query that changes data, written out in full — the interesting half is which method carries it.
+    WRITE_SQL = re.compile(r"(?i)\b(?:INSERT\s+INTO|UPDATE\s+[`\"'\w.]+\s+SET|DELETE\s+FROM)\b")
+    PHP_VAR = re.compile(r"\$(\w+)")
+    # The file already defends itself if it checks a token of any of the usual names.
+    HAS_TOKEN = re.compile(r"(?i)csrf|nonce|check_admin_referer|checkToken|_token\b|authenticity")
+
+    def _from_get(self, body: str, name: str) -> bool:
+        """True when some assignment to $name in this file reads it out of the URL.
+
+        Deliberately not the taint analyser: CSRF does not care whether the value was escaped
+        on the way, only that a GET request reached a write."""
+        pattern = re.compile(r"\$" + re.escape(name) + r"\s*=\s*[^;\n]{0,200}\$_(?:GET|REQUEST)\s*\[")
+        return bool(pattern.search(body))
 
     def check(self, src, taint):
         out = []
-        if src.family == "py":
+        if src.family == "php":
+            body = src.text
+            if "$_GET" not in body and "$_REQUEST" not in body or self.HAS_TOKEN.search(body):
+                return out
+            for i, raw in enumerate(src.lines, start=1):
+                if not self.WRITE_SQL.search(raw):
+                    continue
+                names = [n for n in self.PHP_VAR.findall(raw) if self._from_get(body, n)]
+                if names:
+                    out.append(line_finding(self, src, i, Severity.MEDIUM,
+                                            f"This row is written from `${names[0]}`, which comes out of the URL — a GET "
+                                            "request changes data, so any page can fire it with an <img> tag and no token is checked.",
+                                            "Take state changes over POST only, and verify a per-session CSRF token before the write."))
+                    break
+        elif src.family == "py":
             for node in src.nodes:
                 if node.type == "decorator" and re.match(r"@\s*(?:csrf\.)?csrf_exempt\b|@\s*csrf\.exempt\b", text(node)):
                     out.append(finding(self, src, node, Severity.LOW, "`@csrf_exempt` switches CSRF protection off for this view.",

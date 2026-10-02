@@ -3,7 +3,7 @@ from .appsec import (AutoescapeOff, CsrfExempt, FileInclusion, HardcodedSigningK
 from .code_exec import CodeInjection, CommandInjection
 from .infra import ActionsInjection, ActionsPwnRequest, ContainerPrivileged, DockerfileRisk, TerraformRisk
 from .memory import AllocOverflow, BufferOverflow, FormatString, ShellCommandC, UseAfterFree
-from .config import DebugEnabled, InsecureCors, JwtNoVerify, TlsVerifyDisabled, UnsafeDeserialization, WeakHash
+from .config import DebugEnabled, InsecureCors, JwtNoVerify, TlsVerifyDisabled, UnsafeDeserialization, WeakCipher, WeakCsp, WeakHash
 from .secrets import HardcodedSecret
 from .sqli import SqlInjection
 from .web import NoSqlInjection, OpenRedirect, PathTraversal, ReflectedXss, Ssrf, TemplateInjection
@@ -13,7 +13,7 @@ ALL_RULES = [
     ReflectedXss(), PathTraversal(), Ssrf(), OpenRedirect(), UnsafeDeserialization(),
     HardcodedSecret(), JwtNoVerify(), InsecureCors(), TlsVerifyDisabled(), DebugEnabled(), WeakHash(),
     MassAssignment(), PrototypePollution(), RegexInjection(), InsecureCookie(), InsecureRandom(), HardcodedSigningKey(), Xxe(),
-    AutoescapeOff(), CsrfExempt(), InsecurePermissions(), TempFileRace(), FileInclusion(),
+    AutoescapeOff(), CsrfExempt(), InsecurePermissions(), TempFileRace(), FileInclusion(), WeakCsp(), WeakCipher(),
     # C / C++
     BufferOverflow(), UseAfterFree(), FormatString(), AllocOverflow(), ShellCommandC(),
     # CI / containers / cloud

@@ -311,6 +311,20 @@ RULES.update({
                "Оставьте автоэкранирование включённым и помечайте как safe только очищенный, доверенный HTML."),
         "en": ("Template auto-escaping disabled", "", ""),
     },
+    "ARX-CSP": {
+        "uz": ("XSS'ni to'xtatmaydigan Content-Security-Policy", "Siyosat inline skriptlarga, eval'ga yoki istalgan manbaga ruxsat berayapti — hujumchi kiritgan skript ham xuddi sizniki kabi ishlaydi.",
+               "'unsafe-inline' va 'unsafe-eval' ni olib tashlang; har bir <script> uchun nonce bering (script-src 'nonce-...' 'strict-dynamic') va * o'rniga aniq manbalarni yozing."),
+        "ru": ("Content-Security-Policy, не останавливающий XSS", "Политика разрешает inline-скрипты, eval или любой источник — внедрённый скрипт получает те же права, что и ваш.",
+               "Уберите 'unsafe-inline' и 'unsafe-eval'; выдавайте каждому <script> nonce (script-src 'nonce-...' 'strict-dynamic') и перечисляйте реальные источники вместо *."),
+        "en": ("Content-Security-Policy that does not stop XSS", "", ""),
+    },
+    "ARX-CRYPTO": {
+        "uz": ("Buzilgan yoki noto'g'ri ishlatilgan shifr", "ECB rejimi, DES, RC4 va shunga o'xshashlar buzilgan: bir xil matn bloklari bir xil shifrmatn beradi, kalitlari esa qisqa.",
+               "Autentifikatsiyali rejimdan foydalaning: AES-256-GCM yoki ChaCha20-Poly1305; kalitni parol emas, KDF chiqarsin."),
+        "ru": ("Сломанный или неверно применённый шифр", "Режим ECB, DES, RC4 и подобные сломаны: одинаковые блоки открытого текста дают одинаковый шифртекст, а ключи слишком короткие.",
+               "Используйте аутентифицированный режим: AES-256-GCM или ChaCha20-Poly1305; ключ должен давать KDF, а не пароль напрямую."),
+        "en": ("Broken or misused cipher", "", ""),
+    },
     "ARX-CSRF": {
         "uz": ("CSRF himoyasi o'chirilgan", "Holatni o'zgartiradigan view istalgan saytdan kelgan so'rovni qabul qiladi — zararli sahifa foydalanuvchi nomidan amal bajaradi.",
                "@csrf_exempt ni olib tashlang; API uchun cookie o'rniga token (Authorization sarlavhasi) ishlating."),

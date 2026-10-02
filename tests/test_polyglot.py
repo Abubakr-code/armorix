@@ -17,6 +17,10 @@ def run(tmp_path, name, code):
 
 
 VULNERABLE = [
+    # a write driven by the URL: a GET request changes data, so any page can fire it
+    ("a.php", '<?php\n$new = $_GET["pw"];\n'
+              'mysqli_query($conn, "UPDATE users SET password = \'$new\' WHERE id = 1");\n',
+     [("ARX-CSRF", M), ("ARX-SQLI", C)]),
     # PHP setcookie(): the 6th and 7th arguments are secure and httponly
     ("a.php", '<?php\nsetcookie("sessionId", $v);', [("ARX-COOKIE", M)]),
     ("a.php", '<?php\nsetcookie("auth_token", $v, time()+3600, "/", $h, false, false);', [("ARX-COOKIE", M)]),
@@ -114,6 +118,10 @@ VULNERABLE = [
 ]
 
 SAFE = [
+    # a token is checked, and a write driven by POST is not the CSRF finding
+    ("a.php", '<?php\ncheckToken($_REQUEST["user_token"], $_SESSION["t"]);\n$new = $_GET["pw"];\n'
+              '$q = "UPDATE users SET password = \'$new\' WHERE id = 1";\n', "ARX-CSRF"),
+    ("a.php", '<?php\n$new = $_POST["pw"];\n$q = "UPDATE users SET password = \'$new\' WHERE id = 1";\n', "ARX-CSRF"),
     # both flags passed → nothing to report
     ("a.php", '<?php\nsetcookie("sessionId", $v, time()+3600, "/", $h, true, true);', "ARX-COOKIE"),
     ("a.php", '<?php\n$id = intval($_GET["id"]);\nmysqli_query($conn, "SELECT * FROM u WHERE id=" . $id);', "ARX-SQLI-CRIT"),

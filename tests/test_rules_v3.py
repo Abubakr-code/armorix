@@ -18,7 +18,15 @@ def run(tmp_path, name, code):
 
 
 VULNERABLE = [
-    # taint through a helper's parameter
+    # broken ciphers, named the same way in every language
+    ("a.php", "<?php\n$e = openssl_encrypt($t, 'aes-128-ecb', $k);\n", [("ARX-CRYPTO", M)]),
+    ("A.java", 'Cipher c = Cipher.getInstance("AES/ECB/PKCS5Padding");\n', [("ARX-CRYPTO", M)]),
+    ("a.py", "c = DES.new(key, DES.MODE_ECB)\n", [("ARX-CRYPTO", M)]),
+    ("a.js", "crypto.createCipheriv('des-ede3-cbc', key, iv);\n", [("ARX-CRYPTO", M)]),
+    # a policy that allows what CSP exists to block
+    ("a.php", '<?php\nheader("Content-Security-Policy: script-src \'self\' \'unsafe-inline\'");\n', [("ARX-CSP", M)]),
+    ("a.js", 'res.setHeader("Content-Security-Policy", "default-src *");\n', [("ARX-CSP", M)]),
+    ("a.php", '<?php\nheader("X-XSS-Protection: 0");\n', [("ARX-CSP", L)]),    # taint through a helper's parameter
     ("a.js", """
         function findUser(id) { return db.query("SELECT * FROM users WHERE id = " + id); }
         app.get('/u', (req, res) => findUser(req.query.id));
@@ -178,6 +186,12 @@ SAFE = [
                   TITLE: ${{ github.event.issue.title }}
                 run: echo "$TITLE"
      """, "ARX-GHA-INJECT"),
+    # a strict policy, and a report-only one (it enforces nothing, so it is not the finding)
+    ("a.php", '<?php\nheader("Content-Security-Policy: script-src \'nonce-abc\' \'strict-dynamic\'");\n', "ARX-CSP"),
+    ("a.js", 'res.setHeader("Content-Security-Policy-Report-Only", "script-src \'unsafe-inline\'");\n', "ARX-CSP"),
+    # a URL and a sentence that merely contain the word, and a strong cipher
+    ("a.php", "<?php\n$u = 'https://notes.example.org/crypto/aes-ecb-padding-attack';\n", "ARX-CRYPTO"),
+    ("a.js", "crypto.createCipheriv('aes-256-gcm', key, iv);\n", "ARX-CRYPTO"),
     # Dockerfile with a non-root user and pinned image
     ("Dockerfile", "FROM python:3.12-slim\nRUN useradd -r app\nUSER app\nCMD [\"python\", \"app.py\"]\n", "ARX-DOCKER"),
     # a field:value payload is data, not a credential

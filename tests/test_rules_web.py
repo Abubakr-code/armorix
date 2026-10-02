@@ -119,7 +119,7 @@ def test_no_false_positive(tmp_path, name, code):
 
 def test_every_rule_is_documented():
     ids = [r.id for r in ALL_RULES]
-    assert len(ids) == len(set(ids)) == 38
+    assert len(ids) == len(set(ids)) == 40
     for rule in ALL_RULES:
         assert rule.cwe.startswith("CWE-") and rule.title and rule.description, rule.id
 
