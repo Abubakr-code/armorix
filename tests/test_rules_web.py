@@ -153,3 +153,13 @@ def test_ssrf_allow_list_counts_as_guard(tmp_path):
     (tmp_path / "b.py").write_text(
         'def f():\n    u = urlparse(request.args["u"])\n    if u.hostname not in ALLOWED:\n        abort(403)\n    requests.get(u.geturl())\n')
     assert scan(tmp_path).findings == []
+
+
+def test_the_readme_table_lists_every_rule():
+    """A rule nobody can read about may as well not exist — keep the table in step with the code."""
+    import re
+    from pathlib import Path
+    readme = Path(__file__).resolve().parent.parent / "README.md"
+    listed = set(re.findall(r"^\| (ARX-[A-Z0-9-]+)", readme.read_text(), re.M))
+    missing = sorted(r.id for r in ALL_RULES if r.id not in listed)
+    assert not missing, f"README is missing: {missing}"

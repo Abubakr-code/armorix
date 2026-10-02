@@ -138,6 +138,14 @@ Findings appear as annotations on the pull request diff and as a table in the jo
 | ARX-DOCKER | CWE-250 | root containers, secrets in `ENV` / `ARG`, `curl \| sh`, unpinned base images |
 | ARX-CONTAINER | CWE-250 | `privileged`, Docker socket mounts, host namespaces, SYS_ADMIN (compose / Kubernetes) |
 | ARX-TF | CWE-284 | public buckets, public databases, admin ports open to 0.0.0.0/0, encryption off (Terraform) |
+| ARX-CSP | CWE-693 | a policy with `'unsafe-inline'` / `'unsafe-eval'` or `*`, and `X-XSS-Protection: 0` |
+| ARX-CRYPTO | CWE-327 | ECB mode, DES / 3DES, RC2, RC4, Blowfish — named the same way in every language |
+| ARX-ALLOWLIST | CWE-697 | an allowed URL or origin compared with `includes()`, which matches anywhere in the value |
+| ARX-TMPFILE | CWE-377 | predictable temporary file names, world-writable temp paths |
+| ARX-C-UAF | CWE-416 | use after free |
+| ARX-C-FMT | CWE-134 | format string taken from input |
+| ARX-C-INTOVF | CWE-190 | integer overflow in an allocation size |
+| ARX-C-CMDI | CWE-78 | `system()` / `popen()` built from input |
 | ARX-DEP | CWE-1395 | dependency versions with known CVEs (OSV / GHSA), known-malicious packages |
 
 ## Desktop app
