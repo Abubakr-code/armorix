@@ -110,3 +110,17 @@ def test_php_inside_a_script_block_is_not_parsed_as_javascript(tmp_path):
         "a.php": '<script>\n  var n = <?php echo (int) $_GET["n"]; ?>;\n  console.log(n);\n</script>\n',
     })
     assert not [f for f in scan(tmp_path, deps=False).findings if f.rule_id == "ARX-XSS"]
+
+
+
+def test_dom_xss_in_a_plain_html_page(tmp_path):
+    write(tmp_path, {"index.html": "<html><body>\n<script>\n  var q = location.hash.substring(1);\n"
+                                   "  document.getElementById('o').innerHTML = q;\n</script>\n</body></html>\n"})
+    found = [f for f in scan(tmp_path, deps=False).findings if f.rule_id == "ARX-XSS"]
+    assert found and found[0].line == 4
+
+
+def test_a_script_inside_a_python_string_keeps_its_line_numbers(tmp_path):
+    write(tmp_path, {"app.py": 'PAGE = "<script>alert(\\"hi\\"); document.write(location.hash);</script>"\n'})
+    found = [f for f in scan(tmp_path, deps=False).findings if f.rule_id == "ARX-XSS"]
+    assert found and found[0].line == 1

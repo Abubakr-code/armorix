@@ -34,6 +34,10 @@ def inline_js(src: SourceFile) -> SourceFile | None:
             continue
         # `<?php echo $x; ?>` inside a script is not JavaScript; blank it so the parse stays clean.
         body = PHP_TAG.sub(lambda p: re.sub(r"[^\n]", " ", p.group(0)), body)
+        # A script written inside a Python or PHP string carries that language's escapes: `alert(\"x\")`.
+        # Undo them in place — same length, so every offset still points at the real line.
+        if src.family in {"py", "php"}:
+            body = re.sub(r"""\\(["'])""", r" \1", body)
         blank[m.start(2):m.end(2)] = list(body)
         found = True
     if not found:

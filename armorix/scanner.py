@@ -34,6 +34,8 @@ SKIP_DIRS = {
     ".tox", ".nox", ".ruff_cache", "Pods", ".dart_tool", ".angular", ".parcel-cache", ".vercel", ".serverless", ".vscode-test",
 }
 CONFIG_SUFFIXES = {".json", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".properties", ".xml", ".sh", ".tf"}
+# Pages and single-file components: their <script> blocks are JavaScript nobody else looks at.
+PAGE_SUFFIXES = {".html", ".htm", ".vue", ".svelte"}
 MAX_BYTES = 1_000_000
 PARALLEL_MIN_FILES = 80
 
@@ -59,7 +61,8 @@ def _wanted(path: Path) -> bool:
     name = path.name.lower()
     if name.endswith((".min.js", ".map", ".lock", ".bundle.js")) or name == "package-lock.json":
         return False
-    return (path.suffix.lower() in GRAMMARS or path.suffix.lower() in CONFIG_SUFFIXES or name.startswith(".env")
+    return (path.suffix.lower() in GRAMMARS or path.suffix.lower() in CONFIG_SUFFIXES or path.suffix.lower() in PAGE_SUFFIXES
+            or name.startswith(".env")
             or name in TEXT_FILES or name.startswith("dockerfile") or name.endswith(".dockerfile"))
 
 
@@ -112,8 +115,9 @@ def analyze_file(path: Path, rel: str, disabled: frozenset[str] = frozenset(),
                 out["suppressed"] += 1
                 continue
             out["findings"].append(f.to_dict())
-    if src.family == "php":
-        # A <script> block inside the page is JavaScript the PHP parser never looks at.
+    if src.family in {"php", "py"} or path.suffix.lower() in PAGE_SUFFIXES:
+        # A <script> block inside a page (or inside a Python string holding one) is JavaScript the
+        # file's own parser never looks at.
         page = embedded.inline_js(src)
         if page is not None:
             page_taint = Analyzer(page)
