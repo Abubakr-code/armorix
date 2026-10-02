@@ -129,5 +129,33 @@ def scope(src: SourceFile) -> tuple[set[str], dict[str, int]]:
     return _js(src) if src.family == "js" else _py(src)
 
 
+# Most PHP function names come from extensions we cannot see, so they are not checked. These
+# families are different: they are small, they are in core PHP, and they are what a security patch
+# reaches for — so a name outside the list is the model inventing one (`openssl_cipher_tag_length`).
+PHP_CHECKED_PREFIXES = ("openssl_", "password_", "hash_", "filter_", "random_", "mysqli_stmt_")
+PHP_BUILTINS = {
+    "openssl_encrypt", "openssl_decrypt", "openssl_cipher_iv_length", "openssl_cipher_key_length",
+    "openssl_random_pseudo_bytes", "openssl_digest", "openssl_sign", "openssl_verify", "openssl_seal",
+    "openssl_open", "openssl_pbkdf2", "openssl_error_string", "openssl_get_cipher_methods",
+    "openssl_get_md_methods", "openssl_pkey_new", "openssl_pkey_get_private", "openssl_pkey_get_public",
+    "openssl_pkey_export", "openssl_pkey_free", "openssl_free_key", "openssl_public_encrypt",
+    "openssl_private_decrypt", "openssl_private_encrypt", "openssl_public_decrypt", "openssl_x509_parse",
+    "openssl_x509_read", "openssl_csr_new", "openssl_csr_sign", "openssl_pkcs7_sign", "openssl_pkcs7_verify",
+    "password_hash", "password_verify", "password_needs_rehash", "password_get_info", "password_algos",
+    "hash_hmac", "hash_equals", "hash_algos", "hash_file", "hash_init", "hash_update", "hash_final",
+    "hash_copy", "hash_pbkdf2", "hash_hmac_file", "hash_hmac_algos", "hash_update_file", "hash_update_stream",
+    "filter_var", "filter_input", "filter_var_array", "filter_input_array", "filter_has_var", "filter_id",
+    "filter_list", "random_bytes", "random_int",
+    "mysqli_stmt_bind_param", "mysqli_stmt_execute", "mysqli_stmt_get_result", "mysqli_stmt_close",
+    "mysqli_stmt_bind_result", "mysqli_stmt_fetch", "mysqli_stmt_store_result", "mysqli_stmt_init",
+    "mysqli_stmt_prepare", "mysqli_stmt_num_rows", "mysqli_stmt_affected_rows", "mysqli_stmt_error",
+}
+
+
+def unknown_php_builtin(name: str) -> bool:
+    """True when the name looks like a core PHP function from a family we know in full, but is not one."""
+    return name.startswith(PHP_CHECKED_PREFIXES) and name not in PHP_BUILTINS
+
+
 def globals_for(family: str) -> set[str]:
     return {"js": JS_GLOBALS, "php": PHP_GLOBALS}.get(family, PY_GLOBALS)

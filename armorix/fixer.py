@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .ai import LocalAI
 from .finding import Finding
-from .names import globals_for, scope
+from .names import unknown_php_builtin, globals_for, scope
 from .parsing import GRAMMARS, load, walk
 from .scanner import scan
 
@@ -231,7 +231,8 @@ def _verify(path: Path, finding: Finding, old_text: str, new_text: str, lo: int,
     if len(after) >= len(before):
         return False, "issue count did not go down"
 
-    misuse = _api_misuse(new_src, lo, hi) or _weak_fix(finding, new_text.splitlines()[lo - 1:hi])
+    misuse = (_api_misuse(new_src, lo, hi) or _weak_fix(finding, new_text.splitlines()[lo - 1:hi])
+              or _dropped_markup(finding, old_text, new_text))
     if misuse:
         return False, misuse
 
@@ -255,6 +256,11 @@ def _api_misuse(src, lo: int, hi: int) -> str | None:
         line = call.start_point[0] + 1
         if not lo <= line <= hi:
             continue
+        if src.family == "php":
+            fn_name = call.child_by_field_name("function")
+            called = fn_name.text.decode() if fn_name is not None else ""
+            if unknown_php_builtin(called):
+                return f"`{called}()` is not a PHP function"
         fn = call.child_by_field_name("function")
         name = fn.child_by_field_name("property") if fn is not None and fn.type == "member_expression" else fn
         arg_list = call.child_by_field_name("arguments")
@@ -264,14 +270,64 @@ def _api_misuse(src, lo: int, hi: int) -> str | None:
     return None
 
 
+# Escaping a value is a one-line change; deleting the tags around it changes what the page shows.
+MARKUP = re.compile(r"""['"`]([^'"`\n]*<\s*/?\s*[a-zA-Z][^'"`\n]*)['"`]""")
+
+
+def _dropped_markup(finding: Finding, old_text: str, new_text: str) -> str | None:
+    """An XSS patch escapes the value; it must not throw away the HTML the page printed around it.
+
+    The re-scan cannot see this — the page is just as safe with the markup gone, and quietly wrong."""
+    if finding.rule_id != "ARX-XSS":
+        return None
+    for m in MARKUP.finditer(old_text):
+        tag = m.group(1).strip()
+        if len(tag) > 2 and tag not in new_text:
+            return f"patch removes the markup the page printed (`{tag[:40]}`)"
+    return None
+
+
 INTERNAL_HOSTS = re.compile(r"""['"](?:localhost|127\.0\.0\.1|0\.0\.0\.0|::1|169\.254\.169\.254|metadata\.google\.internal)['"]""")
+
+
+# Text a developer still has to replace. A patch carrying one of these would ship broken.
+PLACEHOLDER = re.compile(r"""['"][^'"\n]*(?:\.\.\.|YOUR[_ ]|REPLACE[_ ]|CHANGE[_ ]ME|TODO|xxxxx)[^'"\n]*['"]""", re.IGNORECASE)
+# AES-GCM needs an IV and a tag; openssl_encrypt($t, 'aes-256-gcm', $k) alone fails at runtime.
+AEAD_CALL = re.compile(r"""openssl_(?:en|de)crypt\s*\(((?:[^()]|\([^()]*\))*)\)""")
+AEAD_MODE = re.compile(r"""['"][\w-]*-(?:gcm|ccm)['"]""", re.IGNORECASE)
 
 
 def _weak_fix(finding: Finding, patched: list[str]) -> str | None:
     """Fixes that pass the scanner but defeat their own purpose."""
     if finding.rule_id == "ARX-SSRF" and any(INTERNAL_HOSTS.search(line) for line in patched):
         return "SSRF allow-list must not include localhost / internal addresses"
+    for line in patched:
+        hit = PLACEHOLDER.search(line)
+        if hit:
+            return f"patch leaves a placeholder to fill in ({hit.group(0)[:40]})"
+        for call in AEAD_CALL.finditer(line):
+            inner = call.group(1)
+            if AEAD_MODE.search(inner) and len(_split_args(inner)) < 5:
+                return "AES-GCM needs an IV and a tag: openssl_encrypt($t, $mode, $k, OPENSSL_RAW_DATA, $iv, $tag)"
     return None
+
+
+def _split_args(inner: str) -> list[str]:
+    """Top-level comma split, so a nested call counts as one argument."""
+    out, depth, cur = [], 0, ""
+    for ch in inner:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+            continue
+        cur += ch
+    if cur.strip():
+        out.append(cur)
+    return out
 
 
 def apply(root: Path, patches: list[Patch]) -> list[Patch]:

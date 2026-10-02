@@ -185,3 +185,52 @@ def test_execfile_with_array_first_is_rejected(tmp_path):
     assert patch.verified, patch.reason
     assert "program name first" in ai.prompts[1]
     assert patch.imports == ['const { execFile } = require("child_process");']
+
+
+# ── a patch must keep what the page printed ─────────────────────
+class _Finding:
+    def __init__(self, rule_id):
+        self.rule_id = rule_id
+
+
+def test_an_xss_patch_may_not_delete_the_markup_around_the_value():
+    old = '<?php echo "<div class=\\"bio\\">" . $row["bio"] . "</div>";'
+    # escaped, re-scan clean, and the page lost its wrapper — the scanner cannot see this
+    stripped = '<?php echo htmlspecialchars($row["bio"], ENT_QUOTES, "UTF-8");'
+    reason = fixer._dropped_markup(_Finding("ARX-XSS"), old, stripped)
+    assert reason and "markup" in reason
+
+
+def test_the_same_patch_with_the_markup_kept_is_accepted():
+    old = '<?php echo "<div class=\\"bio\\">" . $row["bio"] . "</div>";'
+    kept = '<?php echo "<div class=\\"bio\\">" . htmlspecialchars($row["bio"], ENT_QUOTES, "UTF-8") . "</div>";'
+    assert fixer._dropped_markup(_Finding("ARX-XSS"), old, kept) is None
+
+
+def test_other_rules_may_replace_their_literals():
+    # the cipher fix is meant to change the string it found
+    old = "$e = openssl_encrypt($t, 'aes-128-ecb', $k);"
+    new = "$e = openssl_encrypt($t, 'aes-256-gcm', $k, 0, $iv, $tag);"
+    assert fixer._dropped_markup(_Finding("ARX-CRYPTO"), old, new) is None
+
+
+def test_a_patch_may_not_leave_a_placeholder_to_fill_in():
+    bad = ["""header("Content-Security-Policy: script-src 'nonce-...'");"""]
+    assert "placeholder" in (fixer._weak_fix(_Finding("ARX-CSP"), bad) or "")
+
+
+def test_aes_gcm_without_an_iv_and_tag_is_rejected():
+    short = ["$e = openssl_encrypt($t, 'aes-256-gcm', $k);"]
+    full = ["$e = openssl_encrypt($t, 'aes-256-gcm', $k, OPENSSL_RAW_DATA, $iv, $tag);"]
+    assert "IV" in (fixer._weak_fix(_Finding("ARX-CRYPTO"), short) or "")
+    assert fixer._weak_fix(_Finding("ARX-CRYPTO"), full) is None
+
+
+def test_a_patch_may_not_call_a_php_function_that_does_not_exist():
+    from armorix.names import unknown_php_builtin
+    # the model reached for a symmetrical-looking name next to openssl_cipher_iv_length
+    assert unknown_php_builtin("openssl_cipher_tag_length")
+    assert not unknown_php_builtin("openssl_cipher_iv_length")
+    # families we do not know in full are left alone
+    assert not unknown_php_builtin("my_openssl_helper")
+    assert not unknown_php_builtin("wp_verify_nonce")
