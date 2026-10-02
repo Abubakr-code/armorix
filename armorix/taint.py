@@ -122,9 +122,11 @@ class Analyzer:
     self_receivers = {"", "this", "self", "cls"}
     source_types = SOURCE_TYPES
 
-    def __init__(self, src: SourceFile):
+    def __init__(self, src: SourceFile, inbound: dict | None = None):
         self.src = src
         self.family = src.family
+        # {function name: {argument index: where it came from}} — tainted calls made from other files (modules.py)
+        self.inbound = inbound or {}
         self.source_re = self.source_pattern()
         self.assign_types = self.assignment_fields()
         self.tainted: dict[tuple, Origin] = {}
@@ -652,8 +654,20 @@ class Analyzer:
                     break
         return changed
 
+    def _inbound_sources(self) -> None:
+        for fname, slots in self.inbound.items():
+            for fn in self.functions.get(fname, []):
+                params = self._params(fn)
+                # a Python method's first parameter is self; the caller's first argument is the next one
+                shift = 1 if self.family == "py" and params and params[0] and params[0][0][0] in {"self", "cls"} else 0
+                for idx, desc in slots.items():
+                    pos = int(idx) + shift
+                    for pname, pnode in (params[pos] if pos < len(params) else []):
+                        self._taint((fn.id, pname), Origin(line_of(pnode), self.src.line(line_of(pnode)), source=desc))
+
     def _propagate(self) -> None:
         self._framework_sources()
+        self._inbound_sources()
         if self.family == "js":
             self._callback_sources()
         assignments = list(self._assignments())

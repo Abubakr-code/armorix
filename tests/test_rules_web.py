@@ -17,6 +17,9 @@ def run(tmp_path, name, code):
 
 
 VULNERABLE = [
+    # expression evaluators with a history of sandbox escapes
+    ("a.js", "app.post('/c', (req, res) => res.send(mathjs.eval(req.body.eqn)))", [("ARX-EVAL", C), ("ARX-XSS", H)]),
+    ("a.js", "app.get('/t', (req, res) => setTimeout('run(' + req.query.n + ')', 10))", [("ARX-EVAL", C)]),
     # XPath built from input
     ("a.py", "def v():\n    return tree.xpath(\".//user[name='%s']\" % request.args['n'])", [("ARX-XPATH", H)]),
     ("a.js", "app.get('/u', (req, res) => xpath.select(\"//user[name='\" + req.query.n + \"']\", doc))", [("ARX-XPATH", H)]),
@@ -133,6 +136,8 @@ SAFE = [
     ("a.py", "def v():\n    return 'Hello {}'.format(request.args['n'])"),
     # an XPath variable instead of string building
     ("a.py", "def v():\n    return tree.xpath('.//user[name=$n]', n=request.args['n'])"),
+    # setTimeout with a function schedules it; it does not evaluate anything
+    ("a.js", "function tick() {}\nsetInterval(tick, 100);\nsetTimeout(() => go(x), 5);"),
     # comparing the whole value, and a list that is not an allow-list
     ("a.js", "for (const allowedUrl of redirectAllowlist) {\n  ok = ok || url === allowedUrl\n}"),
     ("a.js", "for (const w of searchWords) {\n  hit = hit || title.includes(w)\n}"),

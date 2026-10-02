@@ -23,7 +23,7 @@ from .finding import Finding, Severity
 from .parsing import GRAMMARS, load
 from .project import ProjectConfig, assign_fingerprints, file_ignored, load_config, read_baseline, suppressed
 from .rules import ALL_RULES, TEXT_FILES
-from . import crossfile, embedded, polyglot
+from . import crossfile, embedded, modules, polyglot, templates
 from .rules.infra import line_finding
 from .polyglot import POLY_FAMILIES, PolyAnalyzer
 from .taint import TAINT_FAMILIES, Analyzer
@@ -63,7 +63,7 @@ def _wanted(path: Path) -> bool:
     if name.endswith((".min.js", ".map", ".lock", ".bundle.js")) or name == "package-lock.json":
         return False
     return (path.suffix.lower() in GRAMMARS or path.suffix.lower() in CONFIG_SUFFIXES or path.suffix.lower() in PAGE_SUFFIXES
-            or name.startswith(".env")
+            or name.endswith(templates.SUFFIXES) or name.startswith(".env")
             or name in TEXT_FILES or name.startswith("dockerfile") or name.endswith(".dockerfile"))
 
 
@@ -93,7 +93,7 @@ def discover(root: Path, want=_wanted, config: ProjectConfig | None = None) -> l
 
 
 def analyze_file(path: Path, rel: str, disabled: frozenset[str] = frozenset(),
-                 php_sources: dict | None = None) -> dict:
+                 php_sources: dict | None = None, inbound: dict | None = None) -> dict:
     """Everything the scanner needs from one file, as plain data (runs in worker processes)."""
     src = load(path, rel)
     out = {"lines": len(src.lines), "family": src.family if src.grammar else None, "findings": [], "suppressed": 0}
@@ -101,7 +101,7 @@ def analyze_file(path: Path, rel: str, disabled: frozenset[str] = frozenset(),
         return out
     poly = src.tree is not None and src.family in POLY_FAMILIES
     inherited = crossfile.inherited_for(src.text, rel, php_sources) if php_sources and src.family == "php" else None
-    taint = (PolyAnalyzer(src, inherited) if poly else Analyzer(src)) if src.tree is not None and (poly or src.family in TAINT_FAMILIES) else None
+    taint = (PolyAnalyzer(src, inherited) if poly else Analyzer(src, inbound)) if src.tree is not None and (poly or src.family in TAINT_FAMILIES) else None
     seen = set()
     for rule in ALL_RULES:
         if rule.id in disabled or ("*" not in rule.families and src.family not in rule.families):
@@ -116,6 +116,22 @@ def analyze_file(path: Path, rel: str, disabled: frozenset[str] = frozenset(),
                 out["suppressed"] += 1
                 continue
             out["findings"].append(f.to_dict())
+    if path.name.lower().endswith(templates.SUFFIXES) and "ARX-XSS" not in disabled:
+        xss = next(r for r in ALL_RULES if r.id == "ARX-XSS")
+        for line, expr, engine in templates.raw_outputs(src.text, rel):
+            what = ("turns escaping off for the whole block below it" if expr == "autoescape off"
+                    else f"writes `{expr[:60]}` without escaping")
+            f = line_finding(xss, src, line, Severity.MEDIUM,
+                             f"The {engine} template {what} — if it ever holds user data, that data runs as script.",
+                             "Use the escaped form ({{ x }}, <%= x %>, #{x}) and mark only HTML you built and cleaned yourself as raw.",
+                             fix_key="template")
+            f.data["template_root"] = templates.root_name(expr)
+            if f.key not in seen:
+                seen.add(f.key)
+                if suppressed(f, src.lines):
+                    out["suppressed"] += 1
+                else:
+                    out["findings"].append(f.to_dict())
     if path.suffix.lower() in {".vue", ".svelte"} and "ARX-XSS" not in disabled:
         xss = next(r for r in ALL_RULES if r.id == "ARX-XSS")
         for line, expr, syntax in embedded.raw_html_bindings(src):
@@ -145,6 +161,8 @@ def analyze_file(path: Path, rel: str, disabled: frozenset[str] = frozenset(),
                         out["suppressed"] += 1
                         continue
                     out["findings"].append(f.to_dict())
+    if taint is not None and src.family in TAINT_FAMILIES:
+        out["modules"] = modules.collect(src, taint)  # for flows that continue in another file
     if poly:  # PHP / Go / Java: one table-driven pass over the language's sinks
         for f in polyglot.check(src, taint, disabled):
             if f.key in seen:
@@ -282,7 +300,47 @@ def scan(target: str | Path, deps: bool = True, db: OsvDb | None = None, progres
         cache.put_many({keys[rel]: data for rel, data in fresh.items() if rel in keys})
     result.cached = len(hits)
 
-    for rel, data in {**hits, **fresh}.items():
+    # Flows that continue in another module: analyse each target again with the parameters its callers
+    # passed tainted values into. A few rounds follow route → service → repository chains.
+    every = {**hits, **fresh}
+    paths = {rel: p for p, rel in jobs}
+    seen_inbound: dict[str, dict] = {}
+    for _ in range(4):
+        if stop():
+            break
+        wanted = modules.inbound(every, set(paths))
+        changed = False
+        for target, slots in wanted.items():
+            if target not in paths or slots == seen_inbound.get(target):
+                continue
+            seen_inbound[target] = slots
+            report("flows", 0, 0, target)
+            try:
+                every[target] = analyze_file(paths[target], target, disabled, php_sources, slots)
+                changed = True
+            except Exception as exc:  # one file failing must not stop the scan
+                result.errors.append(f"{target}: {exc.__class__.__name__}: {exc}")
+        if not changed:
+            break
+
+    # A template's raw output is only a lead until a controller is seen rendering it with request data:
+    # res.render("products", {output: {searchTerm: req.query.q}}) makes `<%- output.searchTerm %>` a real flow.
+    contexts: dict[str, dict[str, str]] = {}
+    for rel, data in every.items():
+        for render in (data.get("modules") or {}).get("renders", []):
+            if render["keys"]:
+                for target in templates.resolve(render["template"], set(paths)):
+                    for key, origin in render["keys"].items():
+                        contexts.setdefault(target, {}).setdefault(key, origin)
+    for target, keys in contexts.items():
+        for f in (every.get(target) or {}).get("findings", []):
+            name = (f.get("data") or {}).get("template_root")
+            if name in keys and f["rule_id"] == "ARX-XSS":
+                f["severity"] = Severity.HIGH.name.lower()
+                f["message"] = (f"Untrusted input `{keys[name]}` reaches this template as `{name}` and is written "
+                                "without escaping — cross-site scripting.")
+
+    for rel, data in every.items():
         result.files += 1
         result.lines += data["lines"]
         result.suppressed += data.get("suppressed", 0)

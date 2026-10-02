@@ -6,8 +6,13 @@ from ..finding import Severity
 from ..parsing import text
 from .base import Rule, args, callee, calls, finding, kwarg
 
-JS_EVAL = {("", "eval"), ("", "Function"), ("vm", "runInNewContext"), ("vm", "runInThisContext"), ("vm", "runInContext")}
-PY_EVAL = {("", "eval"), ("", "exec")}
+JS_EVAL = {("", "eval"), ("", "Function"), ("vm", "runInNewContext"), ("vm", "runInThisContext"), ("vm", "runInContext"),
+           ("vm", "compileFunction"),
+           # expression evaluators that have shipped sandbox escapes (mathjs CVE-2017-1001002, safe-eval, vm2)
+           ("mathjs", "eval"), ("mathjs", "evaluate"), ("math", "eval"), ("math", "evaluate"), ("", "safeEval"),
+           ("vm2", "run"), ("", "setTimeout"), ("", "setInterval")}
+PY_EVAL = {("", "eval"), ("", "exec"), ("", "compile")}
+STRING_ONLY = {"setTimeout", "setInterval"}
 
 JS_CP_OBJECTS = {"child_process", "cp", "childProcess", "require('child_process')", 'require("child_process")'}
 JS_SHELL = {"exec", "execSync"}
@@ -40,6 +45,12 @@ class CodeInjection(Rule):
             if (obj, name) not in sinks:
                 continue
             a = args(call)
+            if name in STRING_ONLY and not (a and (a[0].type in {"string", "template_string", "binary_expression"}
+                                                   or taint.is_dynamic_string(a[0]))):
+                continue  # setTimeout(tick, 100) schedules a function; only setTimeout("code", …) evaluates
+            if name == "compile" and len(a) >= 3 and "exec" not in text(a[2]) and "eval" not in text(a[2]) \
+                    and "single" not in text(a[2]):
+                continue
             via, dynamic = _dangerous_arg(taint, a[-1] if (name == "Function" and a) else (a[0] if a else None))
             fix = "Never evaluate strings as code. Parse data with JSON.parse / ast.literal_eval, or map allowed actions to functions."
             if via:

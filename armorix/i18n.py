@@ -494,6 +494,10 @@ FIX_VARIANTS = {
         "uz": "setcookie($n, $v, ['secure' => true, 'httponly' => true, 'samesite' => 'Lax']);",
         "ru": "setcookie($n, $v, ['secure' => true, 'httponly' => true, 'samesite' => 'Lax']);",
     },
+    ("ARX-XSS", "template"): {
+        "uz": "Ekranlanadigan shaklni ishlating ({{ x }}, <%= x %>, #{x}); faqat o'zingiz qurib tozalagan HTML'ni xom deb belgilang.",
+        "ru": "Используйте экранирующую форму ({{ x }}, <%= x %>, #{x}); помечайте как raw только HTML, который вы сами собрали и очистили.",
+    },
     ("ARX-XSS", "angular"): {
         "uz": "Angular qiymatlarni o'zi ekranlaydi; bypassSecurityTrust… buni o'chiradi. Qiymatni oddiy bog'lang "
               "yoki avval DomSanitizer.sanitize(SecurityContext.HTML, value) dan o'tkazing.",
