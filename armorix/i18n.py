@@ -404,7 +404,7 @@ UI = {
            "skipped_cfg": "konfiguratsiya qiymati — uni fayldan o'chiring va kalitni almashtiring",
            "dry": "sinov rejimi — yozish uchun [bold]--apply[/] qo'shing (zaxira: *.armorix.bak)", "to_patch": "{n} ta topilma (≥ {sev}) tuzatiladi — har bir patch qayta tahlil qilinadi",
            "localhost": "tarmoq: faqat localhost", "hidden": "yashirilgan: {b} ta baseline'da, {s} ta armorix-ignore bilan",
-           "cached": "{n} ta fayl keshdan", "config": "sozlama", "baseline_written": "{n} ta topilma baseline'ga yozildi → {path}"},
+           "in_code": "kod", "in_deps": "paket", "dep_title": "zaif paketlar ({n})", "dep_more": "… va yana {n} ta", "dep_hint": "paket CVE'lari kodingizdagi xato emas — [bold]npm audit fix[/] / [bold]pip install -U[/] bilan yangilanadi; to'liq ro'yxat: [bold]--format html[/]", "dep_badge": "+{n} paketda", "confirm": "{n} ta patch qo'llansinmi? Har bir fayl uchun *.armorix.bak zaxirasi saqlanadi [y/N] ", "aborted": "bekor qilindi — hech narsa o'zgartirilmadi", "cached": "{n} ta fayl keshdan", "config": "sozlama", "baseline_written": "{n} ta topilma baseline'ga yozildi → {path}"},
     "ru": {"target": "проект", "files": "файлы", "lines": "строк", "rules": "правил", "deps": "пакеты",
            "deps_ok": "{n} пакетов проверено по офлайн-базе OSV", "deps_off": "пропущено — один раз запустите [bold]armorix db update[/] для проверки CVE пакетов",
            "tagline": "локальный статический анализ", "network": "сеть: выкл", "fix": "исправление", "source": "источник", "flows": "поток", "sink": "сток",
@@ -417,7 +417,7 @@ UI = {
            "skipped_cfg": "значение конфигурации — удалите его из файла и перевыпустите секрет",
            "dry": "пробный режим — добавьте [bold]--apply[/] для записи (резервные копии: *.armorix.bak)", "to_patch": "находок для исправления (≥ {sev}): {n} — каждый патч проверяется повторным сканированием",
            "localhost": "сеть: только localhost", "hidden": "скрыто: {b} в baseline, {s} через armorix-ignore",
-           "cached": "файлов из кэша: {n}", "config": "настройки", "baseline_written": "в baseline записано находок: {n} → {path}"},
+           "in_code": "код", "in_deps": "пакеты", "dep_title": "уязвимые пакеты ({n})", "dep_more": "… и ещё {n}", "dep_hint": "CVE пакетов — не ошибки вашего кода: обновите через [bold]npm audit fix[/] / [bold]pip install -U[/]; полный список: [bold]--format html[/]", "dep_badge": "+{n} в пакетах", "confirm": "Применить патчей: {n}? Для каждого файла сохраняется копия *.armorix.bak [y/N] ", "aborted": "отменено — ничего не изменено", "cached": "файлов из кэша: {n}", "config": "настройки", "baseline_written": "в baseline записано находок: {n} → {path}"},
     "en": {"target": "target", "files": "files", "lines": "lines", "rules": "rules", "deps": "deps",
            "deps_ok": "{n} packages checked against the offline OSV database", "deps_off": "skipped — run [bold]armorix db update[/] once to enable dependency CVE checks",
            "tagline": "local static analysis", "network": "network: off", "fix": "fix", "source": "source", "flows": "flows", "sink": "sink",
@@ -430,7 +430,7 @@ UI = {
            "skipped_cfg": "config value — remove it from the file and rotate the secret",
            "dry": "dry run — add [bold]--apply[/] to write them (backups: *.armorix.bak)", "to_patch": "{n} finding(s) ≥ {sev} to patch — each patch is re-parsed and re-scanned before it counts",
            "localhost": "network: localhost only", "hidden": "hidden: {b} in baseline, {s} by armorix-ignore",
-           "cached": "{n} files from cache", "config": "config", "baseline_written": "wrote {n} finding(s) to the baseline → {path}"},
+           "in_code": "code", "in_deps": "deps", "dep_title": "vulnerable dependencies ({n})", "dep_more": "… and {n} more", "dep_hint": "dependency CVEs are not bugs in your code: update with [bold]npm audit fix[/] / [bold]pip install -U[/]; full list: [bold]--format html[/]", "dep_badge": "+{n} in deps", "confirm": "Apply {n} patch(es)? A *.armorix.bak backup is kept for every file [y/N] ", "aborted": "aborted — nothing was changed", "cached": "{n} files from cache", "config": "config", "baseline_written": "wrote {n} finding(s) to the baseline → {path}"},
 }
 
 SEVERITY = {

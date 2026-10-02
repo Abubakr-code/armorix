@@ -29,6 +29,7 @@ h1{font-size:44px;line-height:1;letter-spacing:-.04em;margin:18px 0 8px;font-wei
 .stat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 20px;cursor:pointer;text-align:left;color:inherit;font:inherit}
 .stat b{display:block;font-size:44px;line-height:1;font-weight:800;letter-spacing:-.03em}
 .stat span{font:600 11px/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.stat em{display:block;margin-top:6px;font:600 11px/1 ui-monospace,monospace;font-style:normal;color:var(--muted);opacity:.72}
 .stat.off{opacity:.4}.s-CRITICAL b{color:var(--crit)}.s-HIGH b{color:var(--high)}.s-MEDIUM b{color:var(--med)}.s-LOW b{color:var(--low)}
 .tools{display:flex;gap:12px;margin-bottom:18px}
 .tools input{flex:1;padding:12px 16px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit}
@@ -82,9 +83,14 @@ def _card(f, lang: str) -> str:
 def to_html(result: ScanResult, lang: str = "en") -> str:
     t = lambda key, **kw: i18n.ui(lang, key, **kw)  # noqa: E731
     counts = Counter(f.severity for f in result.findings)
+    # One lockfile can hold hundreds of CVEs; counted together with your code they hide it.
+    dep_counts = Counter(f.severity for f in result.findings if f.rule_id == "ARX-DEP")
     langs = ", ".join(f"{FAMILY_NAMES.get(k, k)} {v}" for k, v in result.languages.most_common()) or "—"
     stats = "".join(
-        f'<button class="stat s-{s.name}" data-sev="{s.name}"><b>{counts.get(s, 0)}</b><span>{_e(i18n.severity(lang, s))}</span></button>'
+        f'<button class="stat s-{s.name}" data-sev="{s.name}"><b>{counts.get(s, 0) - dep_counts.get(s, 0)}</b>'
+        f'<span>{_e(i18n.severity(lang, s))}</span>'
+        + (f'<em>{_e(t("dep_badge", n=dep_counts[s]))}</em>' if dep_counts.get(s) else "")
+        + "</button>"
         for s in sorted(Severity, reverse=True)
     )
     cards = "".join(_card(f, lang) for f in result.findings) or f'<div class="empty"><b>✓</b>{_e(t("none"))}</div>'

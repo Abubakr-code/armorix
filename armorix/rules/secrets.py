@@ -69,6 +69,8 @@ def mask(secret: str) -> str:
 
 
 NOT_SECRET = re.compile(r"^(?:https?://|/|\./|\.\./|~/)|\.(?:pem|key|json|crt|cer|txt|ya?ml|env|p12|pfx|js|ts|py)$", re.IGNORECASE)
+# `userid:2`, `role:admin`, `v1:beta` — a field:value pair carries data, not a credential.
+FIELD_PAIR = re.compile(r"^[a-z][a-z_-]{1,14}:[a-z0-9_.-]{1,6}$", re.IGNORECASE)
 
 
 HASHED = re.compile(r"^(?:\$2[abxy]?\$|\$argon2|\$scrypt\$|\$pbkdf2|pbkdf2_sha|\$[156]\$|\$y\$|sha256\$|bcrypt\$)")
@@ -77,6 +79,8 @@ HASHED = re.compile(r"^(?:\$2[abxy]?\$|\$argon2|\$scrypt\$|\$pbkdf2|pbkdf2_sha|\
 def looks_random(value: str) -> bool:
     """Real keys and passwords mix character classes; identifiers, command names, prose and paths do not."""
     if not value.isascii() or NOT_SECRET.search(value) or value.isdigit() or HASHED.match(value):
+        return False
+    if FIELD_PAIR.match(value):
         return False
     if any(c.isdigit() for c in value) and any(c.isalpha() for c in value):
         return entropy(value) >= 3.0

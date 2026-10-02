@@ -438,6 +438,9 @@ async function smoke(w) {
   if (process.env.ARMORIX_SMOKE_FOLDER) {
     send("open-path", process.env.ARMORIX_SMOKE_FOLDER);
     await wait(Number(process.env.ARMORIX_SMOKE_WAIT || 6000));
+    // A finished scan lands on the findings list, so ask for the overview before shooting it.
+    await run(`document.querySelector('[data-tab="overview"]')?.click(); true`);
+    await wait(1200);
     await shot("2-overview.png");
     await run(`document.querySelector('[data-tab="findings"]')?.click(); true`);
     await wait(1500);

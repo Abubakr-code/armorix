@@ -2,7 +2,7 @@
   "name": "armorix",
   "displayName": "Armorix \u2014 offline AI code auditor",
   "description": "Finds SQL injection, XSS, secrets, memory bugs (C/C++) and vulnerable dependencies as you code \u2014 and fixes them with a local AI. Your code never leaves the machine.",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "publisher": "armorix",
   "license": "SEE LICENSE IN README.md",
   "icon": "media/icon.png",

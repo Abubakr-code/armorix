@@ -15,6 +15,13 @@ FS_CALLS = ("readFile", "readFileSync", "createReadStream", "writeFile", "writeF
             "appendFileSync", "unlink", "unlinkSync", "rm", "rmSync", "readdir", "readdirSync", "createWriteStream")
 HTTP_VERBS = ("get", "post", "put", "patch", "delete", "head", "request")
 
+# A handler that declares a non-HTML content type cannot reflect script into a page.
+NON_HTML_CT = re.compile(r"""(?i)['"]?content-type['"]?\s*[:=,]\s*['"](?:application|text)/"""
+                         r"""(?:json|plain|csv|xml|octet-stream|javascript|event-stream)""")
+HTML_CT = re.compile(r"""(?i)['"]?content-type['"]?\s*[:=,]\s*['"][^'"]*html""")
+FUNCTIONS = {"function_declaration", "function_expression", "function", "arrow_function",
+             "method_definition", "generator_function_declaration"}
+
 
 class ReflectedXss(CallSinkRule):
     id = "ARX-XSS"
@@ -28,7 +35,14 @@ class ReflectedXss(CallSinkRule):
     fix = {"js": "Return JSON (res.json) or escape the value before building HTML; render views with an auto-escaping template engine."}
 
     def skip(self, src, call, arg):
-        return arg.type in {"object", "array"}  # res.send({...}) → JSON
+        if arg.type in {"object", "array"}:
+            return True  # res.send({...}) → JSON
+        # res.writeHead(200, {"Content-Type": "application/json"}) … res.end(body): no HTML, no XSS.
+        scope = call
+        while scope is not None and scope.type not in FUNCTIONS:
+            scope = scope.parent
+        body = text(scope) if scope is not None else ""
+        return bool(NON_HTML_CT.search(body)) and not HTML_CT.search(body)
 
     def check(self, src, taint):
         out = super().check(src, taint)
@@ -199,10 +213,8 @@ class NoSqlInjection(Rule):
                     if pair.type != "pair":
                         continue
                     key, value = text(pair.child_by_field_name("key")).strip("'\""), pair.child_by_field_name("value")
-                    if key == "$where" and value is not None and not taint.is_literal(value):
-                        out.append(finding(self, src, call, Severity.CRITICAL,
-                                           "`$where` runs JavaScript inside MongoDB with a non-constant value.", self.FIX))
-                        break
+                    if key == "$where":
+                        continue  # handled below, where the severity follows the taint
                     if value is not None and taint.is_source(value):
                         out.append(finding(self, src, call, Severity.HIGH,
                                            f"`{text(value)}` is used as a query value without type casting — an object like "
@@ -218,7 +230,8 @@ class NoSqlInjection(Rule):
             if node.type != "pair" or text(node.child_by_field_name("key")).strip("'\"") != "$where":
                 continue
             value = node.child_by_field_name("value")
-            if value is None or taint.is_literal(value) or value.type in {"function_expression", "arrow_function"} or node.start_point[0] + 1 in reported:
+            if value is None or taint.is_literal(value) or value.type in {"function_expression", "arrow_function"} \
+                    or node.start_point[0] + 1 in reported or taint.provably_safe(value):
                 continue
             via = taint.tainted_by(value)
             out.append(finding(self, src, node, Severity.CRITICAL if via else Severity.HIGH,

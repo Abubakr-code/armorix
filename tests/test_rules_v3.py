@@ -77,7 +77,7 @@ VULNERABLE = [
     ("a.py", "otp = random.randint(100000, 999999)", [("ARX-RANDOM", M)]),
     # hard-coded signing keys
     ("a.js", "const t = jwt.sign({ id }, 'supersecret');", [("ARX-SIGNKEY", H)]),
-    ("a.js", "app.use(session({ secret: 'keyboard cat', resave: false }));", [("ARX-SIGNKEY", H)]),
+    ("a.js", "app.use(session({ secret: 'keyboard cat', resave: false }));", [("ARX-SIGNKEY", H), ("ARX-COOKIE", M)]),
     ("a.py", "app.secret_key = 'dev'", [("ARX-SIGNKEY", H)]),
     # XXE
     ("a.js", "const doc = libxml.parseXml(req.body.xml, { noent: true });", [("ARX-XXE", C)]),
@@ -180,6 +180,9 @@ SAFE = [
      """, "ARX-GHA-INJECT"),
     # Dockerfile with a non-root user and pinned image
     ("Dockerfile", "FROM python:3.12-slim\nRUN useradd -r app\nUSER app\nCMD [\"python\", \"app.py\"]\n", "ARX-DOCKER"),
+    # a field:value payload is data, not a credential
+    ("a.php", '$token = "userid:2";\n', "ARX-SECRET"),
+    ("a.py", 'scope = "role:admin"\n', "ARX-SECRET"),
 ]
 
 

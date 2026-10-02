@@ -30,7 +30,11 @@ TAINT_FAMILIES = {"js", "py"}
 
 # Attacker-controlled entry points, matched against the source text of a node.
 JS_SOURCE = re.compile(
-    r"^(?:req|request|ctx(?:\.request)?)\.(?:query|body|params|headers|cookies|files|file)\b"
+    r"^(?:req|request|ctx(?:\.request)?)\.(?:query|body|params|headers|cookies|signedCookies|files|file)\b"
+    # the request line itself: path and query string are fully attacker-controlled
+    r"|^(?:req|request|ctx(?:\.request)?)\.(?:url|originalUrl|rawHeaders|querystring|href)\b"
+    r"|^(?:req|request|ctx(?:\.request)?)\.(?:path|hostname|host)\b"
+    r"|^(?:req|request|ctx(?:\.request)?)\.(?:get|header|param)\("
     r"|^(?:req|request)\.(?:json|text|formData)\(\)"
     r"|^(?:[\w$]+\.)*searchParams\.get(?:All)?\("
     r"|^event\.(?:body|queryStringParameters|multiValueQueryStringParameters|pathParameters|headers)\b"
@@ -41,6 +45,8 @@ JS_SOURCE = re.compile(
 PY_SOURCE = re.compile(
     r"^request\.(?:args|form|values|json|files|cookies|headers|data|GET|POST|FILES|META|body|query_params|path_params)\b"
     r"|^request\.(?:get_json|get_data|stream)\b"
+    r"|^request\.(?:path|full_path|url|base_url|url_root|referrer|host|user_agent|remote_addr|path_info)\b"
+    r"|^request\.(?:get_full_path|build_absolute_uri|get_host)\("
     r"|^event\[['\"](?:body|queryStringParameters|pathParameters|headers)['\"]\]"
     r"|^event\.get\(\s*['\"](?:body|queryStringParameters|pathParameters|headers)['\"]"
     r"|^sys\.argv\b"
@@ -48,10 +54,17 @@ PY_SOURCE = re.compile(
 )
 SOURCE_TYPES = {"member_expression", "attribute", "call", "call_expression", "subscript", "subscript_expression"}
 
-# Casting to a number (or a UUID / ObjectId) leaves nothing to inject.
+# Casting to a number (or a UUID / ObjectId) leaves nothing to inject; so does hashing —
+# a digest is hex or base64, so it can carry neither a quote nor an operator into a sink.
 SAFE_CASTS = {"int", "float", "bool", "len", "abs", "round", "parseInt", "parseFloat", "Number", "Boolean", "isNaN",
-              "UUID", "ObjectId", "isValidObjectId", "Math.floor", "Math.round", "Math.trunc", "uuid.UUID", "Decimal"}
+              "UUID", "ObjectId", "isValidObjectId", "Math.floor", "Math.round", "Math.trunc", "uuid.UUID", "Decimal",
+              "hexdigest", "hash", "hash_password", "hashSync", "sha1", "sha224", "sha256", "sha384", "sha512",
+              "md5", "hmac", "randomUUID", "uuid4"}
 NUMERIC_TYPES = re.compile(r"^(?:int|float|bool|number|boolean|bigint|UUID|uuid\.UUID|datetime|date|Decimal|PositiveInt|conint\(.*\))$")
+NUMBER_NODES = {"number", "integer", "float", "true", "false", "null", "none", "int_literal", "float_literal",
+                "decimal_integer_literal", "true_lit", "false_lit"}
+# A hash / UUID digest is hex or base64: it cannot carry a quote or an operator into a query.
+DIGEST = re.compile(r"(?i)^(?:hash|hash_password|sha1|sha224|sha256|sha384|sha512|md5|hmac|digest|hexdigest|crc32|uuid4|randomUUID)$")
 
 ASSIGN = {
     "js": {"variable_declarator": ("name", "value"), "assignment_expression": ("left", "right"),
@@ -269,6 +282,41 @@ class Analyzer:
             return not any(c.type == "template_substitution" for c in node.children)
         if node.type == "concatenated_string":
             return all(self.is_literal(c) for c in node.named_children)
+        return False
+
+    def provably_safe(self, node: Node | None, seen: tuple = ()) -> bool:
+        """True when this expression can only ever hold a number or a digest, so no quote or operator
+        can reach a query. `Number(id)` already cast the value — reporting it again is noise."""
+        if node is None or len(seen) > 6:
+            return False
+        t = node.type
+        if t in NUMBER_NODES:
+            return True
+        if t in {"string", "template_string", "concatenated_string"}:
+            subs = [c for c in node.children if c.type in {"interpolation", "template_substitution"}]
+            return all(self.provably_safe(c, seen) for c in subs)
+        if t in self.call_types:
+            if self._safe_cast(node):
+                return True
+            obj, name = self._callee_name(node)
+            return bool(DIGEST.match(name) or (obj and DIGEST.match(obj.rsplit(".", 1)[-1])))
+        if t in {"binary_expression", "binary_operator", "parenthesized_expression", "interpolation",
+                 "template_substitution", "unary_expression", "await_expression", "await"}:
+            kids = [c for c in node.named_children if c.type != "comment"]
+            return bool(kids) and all(self.provably_safe(c, seen) for c in kids)
+        if t in self.name_types and t != "attribute" and t != "member_expression":
+            name = text(node)
+            if name in seen:
+                return False
+            key = self._lookup(self.tainted, name, node) or self._lookup(self.dynamic, name, node) \
+                or (self.scopes(node)[0], name)
+            value = None
+            for start, block, val, plain in getattr(self, "_defs", {}).get(key) or []:
+                if start >= node.start_byte:
+                    break
+                if plain and (block is None or block.start_byte <= node.start_byte < block.end_byte):
+                    value = val
+            return value is not None and self.provably_safe(value, seen + (name,))
         return False
 
     def is_dynamic_string(self, node: Node | None) -> bool:

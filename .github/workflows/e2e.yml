@@ -98,7 +98,7 @@ jobs:
         run: |
           count() { armorix scan "$SHOP" --format json --fail-on none | python -c "import json,sys;print(len(json.load(sys.stdin)['findings']))"; }
           before=$(count)
-          armorix fix "$SHOP" --apply --limit 3 | tee fix.log
+          armorix fix "$SHOP" --apply --yes --limit 3 | tee fix.log
           after=$(count)
           echo "findings: $before → $after"
           test "$after" -lt "$before"

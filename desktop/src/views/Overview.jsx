@@ -30,23 +30,37 @@ export default function Overview({ t, result, state, root, onShow, setTab, toast
   const prev = result.history?.previous_score;
   const diff = result.history?.diff;
 
+  // The three panels below are about your own code: one lockfile would otherwise fill all of them,
+  // and the dependency totals are already on the severity cards. Projects with only CVEs still see them.
+  const own = useMemo(() => {
+    const code = result.findings.filter((f) => f.rule !== "ARX-DEP");
+    return code.length ? code : result.findings;
+  }, [result]);
+
   const byRule = useMemo(() => {
     const map = new Map();
-    for (const f of result.findings) {
+    for (const f of own) {
       const cur = map.get(f.rule) || { n: 0, title: f.title, sev: f.severity, first: f.fingerprint };
       cur.n += 1;
       map.set(f.rule, cur);
     }
     return [...map.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 7);
-  }, [result]);
+  }, [own]);
 
   const byFile = useMemo(() => {
     const map = new Map();
-    for (const f of result.findings) map.set(f.file, (map.get(f.file) || 0) + 1);
+    for (const f of own) map.set(f.file, (map.get(f.file) || 0) + 1);
     return [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 7);
+  }, [own]);
+
+  // A single lockfile can hold hundreds of CVEs: a count that mixes them in hides the bugs in your own code.
+  const depCounts = useMemo(() => {
+    const c = {};
+    for (const f of result.findings) if (f.rule === "ARX-DEP") c[f.severity] = (c[f.severity] || 0) + 1;
+    return c;
   }, [result]);
 
-  const top = result.findings.slice(0, 5);
+  const top = own.slice(0, 5);
 
   const makeBaseline = async () => {
     try {
@@ -84,8 +98,9 @@ export default function Overview({ t, result, state, root, onShow, setTab, toast
       <div className="sev-cards">
         {SEVERITIES.map((s) => (
           <button key={s} className={`card sev-card ${s}`} onClick={() => setTab("findings")}>
-            <b>{counts[s] || 0}</b>
+            <b>{(counts[s] || 0) - (depCounts[s] || 0)}</b>
             <span>{t.sev[s]}</span>
+            {depCounts[s] > 0 && <em className="sev-deps">{t.inDeps(depCounts[s])}</em>}
           </button>
         ))}
       </div>
@@ -132,7 +147,7 @@ export default function Overview({ t, result, state, root, onShow, setTab, toast
           </div>
           <div className="card">
             <h3 className="card-title"><FileWarning size={16} /> {t.byFile}</h3>
-            <Bars items={byFile.map(([file, n]) => [file, n, "", result.findings.find((f) => f.file === file)?.fingerprint])} max={byFile[0]?.[1] || 1} onPick={onShow} />
+            <Bars items={byFile.map(([file, n]) => [file, n, "", own.find((f) => f.file === file)?.fingerprint])} max={byFile[0]?.[1] || 1} onPick={onShow} />
           </div>
           <div className="card actions-card">
             <h3 className="card-title"><Sparkles size={16} /> {t.nextSteps}</h3>

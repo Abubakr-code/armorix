@@ -39,7 +39,7 @@ armorix db update --from /media/usb/osv          # air-gapped: import the OSV al
 
 armorix ai setup                                 # local AI (llama.cpp + Qwen2.5-Coder 1.5B, 1.1 GB, once)
 armorix fix .                                    # AI patches, each one re-scanned (dry run)
-armorix fix . --apply --limit 5                  # write verified patches (*.armorix.bak backups)
+armorix fix . --apply --limit 5                  # review the diffs, then write them (*.armorix.bak backups; -y skips the prompt)
 
 armorix scan . --deep                            # + git history secrets, auth / IDOR checks, AI handler review
 armorix hook install                             # git pre-commit: block commits with critical findings

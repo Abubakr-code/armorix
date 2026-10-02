@@ -115,6 +115,7 @@ class InsecureCookie(Rule):
     description = "A session or auth cookie can be read by JavaScript (stolen via XSS) or sent over plain HTTP."
     FIX = "Set httpOnly: true, secure: true and sameSite: 'lax' (or 'strict') on session and token cookies."
     SESSIONISH = re.compile(r"(?i)sess|token|auth|jwt|sid\b|remember|login")
+    COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
 
     def check(self, src, taint):
         out = []
@@ -130,10 +131,19 @@ class InsecureCookie(Rule):
                     out.append(finding(self, src, call, Severity.MEDIUM,
                                        f"Cookie {text(a[0])} is set without {' and '.join(missing)}.", self.FIX))
             elif src.family == "js" and name in {"session", "cookieSession", "expressSession"}:
-                body = text(call)
+                # A commented-out `httpOnly: true` is the single most common thing inside a session config.
+                body = self.COMMENT.sub(" ", text(call))
                 bad = [m.group(1) for m in re.finditer(r"\b(httpOnly|secure)\s*:\s*false", body)]
                 if bad:
                     out.append(finding(self, src, call, Severity.MEDIUM, f"Session cookie has {', '.join(b + ': false' for b in bad)}.", self.FIX))
+                elif a and a[0].type in {"object", "dictionary"}:
+                    # The default is an insecure cookie, so leaving the flags out is the same bug as writing false.
+                    # Any value counts as set: `secure: process.env.NODE_ENV === "production"` is the normal idiom.
+                    absent = [flag for flag in ("httpOnly", "secure") if not re.search(rf"\b{flag}\s*:", body)]
+                    if absent:
+                        out.append(finding(self, src, call, Severity.MEDIUM,
+                                           f"Session cookie never sets {' or '.join(absent)} — Express defaults to a cookie "
+                                           "readable by JavaScript and sent over plain HTTP.", self.FIX))
             elif src.family == "py" and name == "set_cookie" and a:
                 if not self.SESSIONISH.search(text(a[0])):
                     continue

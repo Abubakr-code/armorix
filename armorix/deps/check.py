@@ -23,10 +23,15 @@ class DependencyRule:
 
 def check_manifest(db: OsvDb, path: Path, rel: str) -> list[Finding]:
     out = []
+    seen: set[tuple[str, str]] = set()
     for dep in parse(path, rel):
+        # A lockfile lists the same package at every path that depends on it; one upgrade fixes them all.
+        if (dep.name, dep.version) in seen:
+            continue
         advisories = db.lookup(dep.ecosystem, dep.name, dep.version)
         if not advisories:
             continue
+        seen.add((dep.name, dep.version))
         top = advisories[0]
         if any(a.malicious for a in advisories):
             mal = next(a for a in advisories if a.malicious)

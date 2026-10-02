@@ -39,7 +39,18 @@ VULNERABLE = [
     # NoSQL
     ("a.js", "User.findOne({ email: req.body.email, password: req.body.password });", [("ARX-NOSQL", H)]),
     ("a.js", "const q = req.body;\nUsers.find(q);", [("ARX-NOSQL", H)]),
-    ("a.js", "db.users.find({ $where: 'this.age > ' + age });", [("ARX-NOSQL", C)]),
+    # … but declaring text/html keeps the finding
+    ("a.js", "function h(req, res) {\n  res.writeHead(200, { 'Content-Type': 'text/html' });\n"
+             "  res.end('<p>' + req.url + '</p>');\n}", [("ARX-XSS", H)]),
+    # a digest is hex, so it cannot inject: the advisory about string-built SQL stays, the CRITICAL goes
+    ("a.js", "app.post('/l', (req, res) => db.query(`SELECT * FROM u WHERE pw = '${sha256(req.body.pw)}'`));",
+     [("ARX-SQLI", M)]),
+    # express-session with no cookie options at all: the default cookie has neither flag
+    ("a.js", "app.use(session({ secret: s, resave: true, saveUninitialized: true }));", [("ARX-COOKIE", M)]),
+    ("a.js", "app.use(session({ secret: s, cookie: { httpOnly: true } }));", [("ARX-COOKIE", M)]),
+    # a value built at runtime is HIGH; untrusted input in it is CRITICAL
+    ("a.js", "db.users.find({ $where: 'this.age > ' + age });", [("ARX-NOSQL", H)]),
+    ("a.js", "app.get('/r', (req, res) => db.users.find({ $where: 'this.age > ' + req.query.age }));", [("ARX-NOSQL", C)]),
     # deserialization
     ("a.py", 'data = request.get_data()\nobj = pickle.loads(data)', [("ARX-DESER", C)]),
     ("a.py", "cfg = yaml.load(open('c.yml'))", [("ARX-DESER", M)]),
@@ -78,6 +89,16 @@ SAFE = [
     ("a.py", "app.run(debug=os.environ.get('DEBUG') == '1')"),
     ("a.py", 'img = Image.open(request.files["img"])'),
     ("a.py", 'webbrowser.open(request.args["u"])'),
+    # a JSON handler cannot reflect script into a page …
+    ("a.js", "function h(req, res) {\n  res.writeHead(200, { 'Content-Type': 'application/json' });\n"
+             "  res.end(JSON.stringify({ q: req.url }));\n}"),
+    # both flags set, however they are computed
+    ("a.js", "app.use(session({ secret: s, cookie: { httpOnly: true, secure: process.env.NODE_ENV === 'production' } }));"),
+    ("a.js", "app.use(session(sessionConfig));"),
+    # already cast to a number / hashed: nothing injectable is left for $where
+    ("a.js", "app.get('/r', (req, res) => { const id = Number(req.query.id);\n"
+             "  db.reviews.find({ $where: 'this.product == ' + id }); });"),
+    ("a.js", "app.get('/r', (req, res) => db.users.find({ $where: `this.t == ${parseInt(req.query.t, 10)}` }));"),
 ]
 
 

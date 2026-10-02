@@ -31,6 +31,7 @@ from .scanner import ScanResult, scan, severity_counts
 
 COLORS = {Severity.CRITICAL: "bold white on red", Severity.HIGH: "bold red", Severity.MEDIUM: "bold yellow", Severity.LOW: "cyan"}
 ACCENT = "#7088ff"
+DEP_ROWS = 12  # how many vulnerable packages the terminal lists before linking to the full report
 FAMILY_NAMES = {"js": "JS/TS", "py": "Python", "c": "C/C++", "php": "PHP", "go": "Go", "java": "Java"}
 
 
@@ -55,8 +56,11 @@ def render(result: ScanResult, console: Console, lang: str = "en") -> None:
     if result.config or result.baselined or result.suppressed:
         console.print()
 
+    code = [f for f in result.findings if f.rule_id != "ARX-DEP"]
+    deps = [f for f in result.findings if f.rule_id == "ARX-DEP"]
+
     width = max(len(t("source")), len(t("flows")), len(t("sink")))
-    for f in result.findings:
+    for f in code:
         title, message, fix = i18n.localize(f, lang)
         sev = Text(f" {i18n.severity(lang, f.severity)} ", style=COLORS[f.severity])
         console.print(Text.assemble(sev, "  ", (f.cwe, f"bold {ACCENT}"), "  ", (title, "bold"), "  ", (f"{f.file}:{f.line}", "dim underline")))
@@ -70,10 +74,33 @@ def render(result: ScanResult, console: Console, lang: str = "en") -> None:
             console.print(f"   {' ' * width} [dim]{f.line:>4} │[/] {escape(f.snippet[:120])}")
         console.print(f"   [{ACCENT}]{t('fix')}[/] {escape(fix)}\n")
 
-    counts = Counter(f.severity for f in result.findings)
-    table = Table(show_header=False, box=None, padding=(0, 2))
+    # One lockfile can hold hundreds of CVEs; listed in full they bury the findings in your own code.
+    if deps:
+        shown = deps[:DEP_ROWS]
+        table = Table(show_header=False, box=None, padding=(0, 2))
+        for f in shown:
+            d = f.data
+            table.add_row(Text(f" {i18n.severity(lang, f.severity)} ", style=COLORS[f.severity]),
+                          escape(f"{d['pkg']} {d['ver']}"),
+                          Text(f"→ {d['target']}", style="green") if d.get("target") else Text("—", style="dim"),
+                          Text(f"{d['n']} CVE", style="dim"))
+        if len(deps) > DEP_ROWS:
+            table.add_row("", f"[dim]{t('dep_more', n=len(deps) - DEP_ROWS)}[/]", "", "")
+        console.print(Panel(table, title=t("dep_title", n=len(deps)), title_align="left", border_style="dim", expand=False))
+        console.print(f"[dim]{t('dep_hint')}[/]\n")
+
+    # Your code and your dependencies are separate jobs — count them separately.
+    table = Table(show_header=bool(deps), box=None, padding=(0, 2))
+    table.add_column("")
+    table.add_column(t("in_code"), justify="right")
+    if deps:
+        table.add_column(t("in_deps"), justify="right")
+    cc, dc = Counter(f.severity for f in code), Counter(f.severity for f in deps)
     for sev in sorted(Severity, reverse=True):
-        table.add_row(Text(f" {i18n.severity(lang, sev)} ", style=COLORS[sev]), str(counts.get(sev, 0)))
+        row = [Text(f" {i18n.severity(lang, sev)} ", style=COLORS[sev]), str(cc.get(sev, 0))]
+        if deps:
+            row.append(str(dc.get(sev, 0)))
+        table.add_row(*row)
     console.print(Panel(table, title=t("summary"), title_align="left", border_style="dim", expand=False))
     verdict = f"[bold green]{t('clean')}[/]" if not result.findings else f"[bold]{t('issues', n=len(result.findings))}[/]"
     console.print(f"{verdict} · {t('time', ms=f'{result.seconds * 1000:.0f}')} · [green]{t('zero')}[/]")
@@ -142,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
     p_fix = sub.add_parser("fix", help="let the local AI patch findings; every patch is re-scanned before it counts")
     p_fix.add_argument("path", nargs="?", default=".")
     p_fix.add_argument("--apply", action="store_true", help="write verified patches (a .armorix.bak backup is kept)")
+    p_fix.add_argument("--yes", "-y", action="store_true", help="apply without the confirmation prompt (for scripts and CI)")
     p_fix.add_argument("--limit", type=int, default=8, help="maximum findings to patch (default 8)")
     p_fix.add_argument("--min-severity", default="high", choices=[s.name.lower() for s in Severity])
     p_fix.add_argument("--lang", choices=list(i18n.LANGS), help="output language")
@@ -318,6 +346,11 @@ def _fix(ns) -> int:
         if ok:
             console.print(f"[dim]{t('dry')}[/]")
         return 0
+    # An AI patch is a starting point, not a guarantee: at a terminal, the diffs above get a yes or no.
+    if ok and not ns.yes and sys.stdin.isatty():
+        if not console.input(f"[bold]{t('confirm', n=len(ok))}[/]").strip().lower().startswith("y"):
+            console.print(f"[yellow]{t('aborted')}[/]")
+            return 0
     applied = fixer.apply(root, patches)
     # Patches that overlapped an applied one (same function) are re-proposed on the updated file.
     leftover = {(p.finding.rule_id, p.finding.file) for p in ok if p not in applied}
