@@ -9,6 +9,9 @@ from ..parsing import text, walk
 from .base import CallSinkRule, Rule, args, callee, calls, finding, kwarg
 
 XSS_SANITIZERS = ("DOMPurify", "sanitize", "escape", "xss(", "encode(", "bleach")
+# `this.sanitizer.bypassSecurityTrustHtml(x)` tells Angular to trust x — the name contains
+# "sanitize", so it has to be recognised before XSS_SANITIZERS clears the line.
+BYPASS_SANITIZER = re.compile(r"bypassSecurityTrust(?:Html|Script|Style|Url|ResourceUrl)")
 RES = ("res", "response", "reply")
 FS_OBJECTS = ("fs", "fsp", "fs.promises", "promises", "fse", "fsPromises")
 FS_CALLS = ("readFile", "readFileSync", "createReadStream", "writeFile", "writeFileSync", "appendFile",
@@ -69,6 +72,9 @@ class ReflectedXss(CallSinkRule):
                     value = a[0]
                 elif name == "insertAdjacentHTML" and len(a) > 1:
                     value = a[1]
+                elif BYPASS_SANITIZER.fullmatch(name) and a:
+                    # Angular's DomSanitizer: the whole point of these calls is to switch escaping off.
+                    value = a[0]
             elif node.type == "jsx_attribute" and text(node.named_children[0]) == "dangerouslySetInnerHTML":
                 value = node
             if value is None or taint.is_literal(value) or any(s in text(value) for s in XSS_SANITIZERS):
@@ -78,12 +84,17 @@ class ReflectedXss(CallSinkRule):
             if node.type == "jsx_attribute" and not any(n.type in {"identifier", "member_expression", "template_substitution"} for n in walk(value)):
                 continue
             via = taint.tainted_by(value)
+            bypass = node.type == "call_expression" and BYPASS_SANITIZER.fullmatch(callee(node)[1] or "")
+            here = ("Angular escapes values by default; bypassSecurityTrust… turns that off. Bind the value normally, "
+                    "or pass it through DomSanitizer.sanitize(SecurityContext.HTML, value) first.") if bypass else fix
             if via:
                 out.append(finding(self, src, node, Severity.HIGH,
-                                   f"Untrusted input `{taint.root(via)}` is inserted as HTML (DOM XSS).", fix, taint, via))
+                                   f"Untrusted input `{taint.root(via)}` is "
+                                   + ("handed to Angular as already-trusted HTML (DOM XSS)." if bypass
+                                      else "inserted as HTML (DOM XSS)."), here, taint, via))
             elif value.type not in {"number", "true", "false"}:
                 out.append(finding(self, src, node, Severity.MEDIUM,
-                                   "A non-constant value is inserted as raw HTML — safe only if it can never contain user data.", fix))
+                                   "A non-constant value is inserted as raw HTML — safe only if it can never contain user data.", here))
         return out
 
     def _py_return(self, src, taint):
@@ -261,3 +272,58 @@ class NoSqlInjection(Rule):
                                self.FIX, taint, via))
         return out
 
+
+
+class SubstringAllowlist(Rule):
+    id = "ARX-ALLOWLIST"
+    cwe = "CWE-697"
+    title = "Allow-list checked with a substring match"
+    description = "An allowed URL or origin compared with includes() matches anywhere in the string, so an attacker only has to mention it."
+    families = ("js",)
+    LIST_NAME = re.compile(r"(?i)(?:allow|white|permit|trust|valid|safe|known)\w*"
+                           r"(?:list|urls?|origins?|hosts?|domains?|sites?|redirects?)|"
+                           r"(?:urls?|origins?|hosts?|domains?)(?:allow|white)\w*list")
+    LOOSE = {"includes", "indexOf", "search", "contains"}
+    FIX = ("Compare the whole value: `url === allowed`, or parse it and compare the origin "
+           "(`new URL(url).origin === allowed`). A substring match lets https://evil.com/?r=https://you.com through.")
+
+    def check(self, src, taint):
+        out = []
+        for node in src.nodes:
+            name = self._allowlist_var(node)
+            if name is None:
+                continue
+            for call in (n for n in walk(node) if n.type == "call_expression"):
+                _, method = callee(call)
+                if method not in self.LOOSE:
+                    continue
+                a = args(call)
+                fn = call.child_by_field_name("function")
+                receiver = text(fn.child_by_field_name("object")) if fn is not None and fn.type == "member_expression" else ""
+                # the entry may be wrapped on the way in: url.includes(encodeURI(allowedUrl))
+                mentions = a and any(n.type == "identifier" and text(n) == name for n in walk(a[0]))
+                if mentions or receiver == name:
+                    out.append(finding(self, src, call, Severity.MEDIUM,
+                                       f"An entry from the allow-list is matched with `{method}()`, which is true anywhere "
+                                       "in the value — https://evil.com/?next=https://allowed.example passes.", self.FIX))
+                    break
+        return out
+
+    def _allowlist_var(self, node):
+        """The per-item name of a loop or .some()/.every() over an allow-list, or None."""
+        if node.type == "for_in_statement":  # for (const allowed of allowlist)
+            right, left = node.child_by_field_name("right"), node.child_by_field_name("left")
+            if right is not None and left is not None and self.LIST_NAME.search(text(right)):
+                return text(left)
+        if node.type == "call_expression":
+            fn = node.child_by_field_name("function")
+            if fn is None or fn.type != "member_expression" or text(fn.child_by_field_name("property")) not in {"some", "every", "find", "filter"}:
+                return None
+            if not self.LIST_NAME.search(text(fn.child_by_field_name("object"))):
+                return None
+            cb = next((a for a in args(node) if a.type in {"arrow_function", "function_expression", "function"}), None)
+            params = cb.child_by_field_name("parameters") or cb.child_by_field_name("parameter") if cb is not None else None
+            if params is not None:
+                names = [n for n in walk(params) if n.type == "identifier"]
+                return text(names[0]) if names else None
+        return None

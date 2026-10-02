@@ -304,6 +304,13 @@ RULES.update({
                "Используйте defusedxml или отключите сущности: lxml XMLParser(resolve_entities=False), в libxmljs не передавайте noent: true."),
         "en": ("XML external entities (XXE)", "", ""),
     },
+    "ARX-ALLOWLIST": {
+        "uz": ("Ruxsat ro'yxati qism-satr bo'yicha tekshirilgan", "Ruxsat etilgan URL yoki origin includes() bilan solishtirilyapti — u satrning istalgan joyida mos keladi, demak hujumchi uni shunchaki qiymat ichida eslatsa yetadi.",
+               "To'liq qiymatni solishtiring: `url === allowed`, yoki parse qilib origin'ni taqqoslang (`new URL(url).origin === allowed`)."),
+        "ru": ("Белый список проверяется по подстроке", "Разрешённый URL или origin сравнивается через includes() — совпадение в любом месте строки, поэтому атакующему достаточно упомянуть его в значении.",
+               "Сравнивайте значение целиком: `url === allowed`, либо разберите URL и сравните origin (`new URL(url).origin === allowed`)."),
+        "en": ("Allow-list checked with a substring match", "", ""),
+    },
     "ARX-AUTOESCAPE": {
         "uz": ("Shablonda avtomatik ekranlash o'chirilgan", "HTML shablonlar o'zgaruvchilarni ekranlamasdan chiqaryapti — har qanday foydalanuvchi qiymati XSS'ga aylanadi.",
                "Avtomatik ekranlashni yoqilgan holda qoldiring va faqat tozalangan, ishonchli HTML'ni safe deb belgilang."),

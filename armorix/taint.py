@@ -39,7 +39,9 @@ JS_SOURCE = re.compile(
     r"|^(?:[\w$]+\.)*searchParams\.get(?:All)?\("
     r"|^event\.(?:body|queryStringParameters|multiValueQueryStringParameters|pathParameters|headers)\b"
     r"|^process\.argv\b"
-    r"|^(?:window\.|document\.)?location\.(?:search|hash|href)\b"
+    r"|^(?:window\.|document\.)?location\.(?:search|hash|href|pathname)\b"
+    # Angular: the router hands the query string straight to the component
+    r"|^(?:this\.)?(?:route|activatedRoute|_route)\.(?:snapshot\.)?(?:queryParams|params|queryParamMap|paramMap|fragment)\b"
     r"|^document\.(?:URL|documentURI|referrer)\b"
 )
 PY_SOURCE = re.compile(
@@ -494,6 +496,28 @@ class Analyzer:
                     continue
                 self._taint((fn.id, pname), Origin(line, self.src.line(line), source=f"URL parameter `{pname}`"))
 
+    # `this.route.queryParams.subscribe(p => …)` and `fetch(u).then(r => …)`: the value arrives in
+    # the callback, so the callback's first parameter holds it.
+    DELIVERS = {"subscribe", "then", "forEach", "map", "flatMap", "mergeMap", "switchMap", "tap"}
+
+    def _callback_sources(self) -> None:
+        for call in self.src.call_nodes:
+            obj, name = self._callee_name(call)
+            if name not in self.DELIVERS:
+                continue
+            fn = call.child_by_field_name("function")
+            receiver = fn.child_by_field_name("object") if fn is not None else None
+            if receiver is None:
+                continue
+            via = text(receiver) if self.is_source(receiver) else self.tainted_by(receiver)
+            if not via:
+                continue
+            args, _ = self.call_arguments(call)
+            cb = next((a for a in args if a.type in self.function_types), None)
+            params = self._params(cb)[0] if cb is not None and self._params(cb) else []
+            for pname, pnode in params[:1]:
+                self._taint((cb.id, pname), self._origin(receiver, via))
+
     def _nest_handler(self, fn: Node) -> None:
         box = fn.child_by_field_name("parameters")
         for p in box.named_children if box is not None else []:
@@ -581,6 +605,8 @@ class Analyzer:
 
     def _propagate(self) -> None:
         self._framework_sources()
+        if self.family == "js":
+            self._callback_sources()
         assignments = list(self._assignments())
         for _ in range(8):
             changed = False

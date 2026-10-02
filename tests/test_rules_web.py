@@ -17,6 +17,15 @@ def run(tmp_path, name, code):
 
 
 VULNERABLE = [
+    # an allow-list entry matched anywhere in the value: https://evil.com/?r=https://ok.example passes
+    ("a.js", "for (const allowedUrl of redirectAllowlist) {\n  ok = ok || url.includes(allowedUrl)\n}", [("ARX-ALLOWLIST", M)]),
+    ("a.js", "const ok = allowedOrigins.some(o => req.headers.origin.indexOf(o) !== -1)", [("ARX-ALLOWLIST", M)]),
+    ("a.js", "for (const u of trustedUrls) {\n  ok = ok || url.includes(encodeURI(u))\n}", [("ARX-ALLOWLIST", M)]),
+    # Angular: the router is a source, and bypassSecurityTrust… is the sink
+    ("a.ts", "filterTable() {\n  const q = this.route.snapshot.queryParams.q\n"
+             "  this.searchValue = this.sanitizer.bypassSecurityTrustHtml(q)\n}", [("ARX-XSS", H)]),
+    ("a.ts", "ngOnInit() {\n  this.route.queryParams.subscribe(p => {\n"
+             "    this.url = this.sanitizer.bypassSecurityTrustResourceUrl(p.next)\n  })\n}", [("ARX-XSS", H)]),
     # XSS
     ("a.js", "app.get('/', (req, res) => res.send('<h1>' + req.query.name + '</h1>'));", [("ARX-XSS", H)]),
     ("a.js", "el.innerHTML = location.hash.slice(1);", [("ARX-XSS", H)]),
@@ -91,6 +100,11 @@ SAFE = [
     ("a.py", "app.run(debug=os.environ.get('DEBUG') == '1')"),
     ("a.py", 'img = Image.open(request.files["img"])'),
     ("a.py", 'webbrowser.open(request.args["u"])'),
+    # comparing the whole value, and a list that is not an allow-list
+    ("a.js", "for (const allowedUrl of redirectAllowlist) {\n  ok = ok || url === allowedUrl\n}"),
+    ("a.js", "for (const w of searchWords) {\n  hit = hit || title.includes(w)\n}"),
+    # binding the value normally lets Angular escape it
+    ("a.ts", "filterTable() {\n  const q = this.route.snapshot.queryParams.q\n  this.searchValue = q\n}"),
     # a literal path prefix pins the redirect to this host
     ("a.js", "app.get('/p', (req, res) => res.redirect('/pet/' + req.query.id));"),
     ("a.js", "app.get('/p', (req, res) => res.redirect(`/user/${req.params.id}/edit`));"),
@@ -119,7 +133,7 @@ def test_no_false_positive(tmp_path, name, code):
 
 def test_every_rule_is_documented():
     ids = [r.id for r in ALL_RULES]
-    assert len(ids) == len(set(ids)) == 40
+    assert len(ids) == len(set(ids)) == 41
     for rule in ALL_RULES:
         assert rule.cwe.startswith("CWE-") and rule.title and rule.description, rule.id
 

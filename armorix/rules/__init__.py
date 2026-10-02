@@ -6,14 +6,14 @@ from .memory import AllocOverflow, BufferOverflow, FormatString, ShellCommandC, 
 from .config import DebugEnabled, InsecureCors, JwtNoVerify, TlsVerifyDisabled, UnsafeDeserialization, WeakCipher, WeakCsp, WeakHash
 from .secrets import HardcodedSecret
 from .sqli import SqlInjection
-from .web import NoSqlInjection, OpenRedirect, PathTraversal, ReflectedXss, Ssrf, TemplateInjection
+from .web import NoSqlInjection, OpenRedirect, PathTraversal, ReflectedXss, Ssrf, SubstringAllowlist, TemplateInjection
 
 ALL_RULES = [
     SqlInjection(), NoSqlInjection(), CommandInjection(), CodeInjection(), TemplateInjection(),
     ReflectedXss(), PathTraversal(), Ssrf(), OpenRedirect(), UnsafeDeserialization(),
     HardcodedSecret(), JwtNoVerify(), InsecureCors(), TlsVerifyDisabled(), DebugEnabled(), WeakHash(),
     MassAssignment(), PrototypePollution(), RegexInjection(), InsecureCookie(), InsecureRandom(), HardcodedSigningKey(), Xxe(),
-    AutoescapeOff(), CsrfExempt(), InsecurePermissions(), TempFileRace(), FileInclusion(), WeakCsp(), WeakCipher(),
+    AutoescapeOff(), CsrfExempt(), InsecurePermissions(), TempFileRace(), FileInclusion(), WeakCsp(), WeakCipher(), SubstringAllowlist(),
     # C / C++
     BufferOverflow(), UseAfterFree(), FormatString(), AllocOverflow(), ShellCommandC(),
     # CI / containers / cloud
