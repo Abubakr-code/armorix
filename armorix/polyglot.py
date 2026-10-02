@@ -30,6 +30,12 @@ SOURCES = {
         r"|^\\?(?:Input|Request)::(?:get|input|all|query|post)\b"
         r"|^\$this->request->(?:getVar|getPost|getGet|getJSON|getRawInput|input|post|get)\b"
         r"|^file_get_contents\(\s*['\"]php://input|^\$argv\b"
+        # Rows come back out of the database holding whatever was stored there earlier, which is how
+        # stored XSS works. Reported for HTML sinks only — see DB_SOURCE in _report.
+        r"|^(?:mysqli_fetch_\w+|pg_fetch_\w+|sqlsrv_fetch_array)\("
+        # the pattern is matched from the start of the node, so a chained `$pdo->query(…)->fetchAll()`
+        # needs the receiver allowed for in front of it
+        r"|^[^;\n]{0,160}->(?:fetch(?:All|Object|Assoc|Row|Column|_assoc|_row)?|get_(?:results|row|col|var))\("
     ),
     "go": re.compile(
         r"^(?:r|req|request|httpReq)\.(?:URL\.(?:Query\(\)(?:\.Get)?|RawQuery|Path)|FormValue|PostFormValue|Form|PostForm|MultipartForm"
@@ -512,11 +518,47 @@ def _guarded(node: Node, rule: str, types: set[str]) -> bool:
     return bool(guard.search(text(cur))) if cur is not None else False
 
 
+# A database row is only *second-hand* input: it is a real source for stored XSS, and a guess
+# anywhere else, so it is reported for HTML sinks and dropped for the rest.
+DB_SOURCE = re.compile(r"(?:mysqli_fetch_|pg_fetch_|sqlsrv_fetch_|->fetch|->get_results|->get_row|->get_col|->get_var)")
+
+
+def _second_hand(taint, via) -> bool:
+    """The value came back out of the database rather than straight off the request."""
+    return bool(DB_SOURCE.search(str(taint.root(via))))
+
+
+def _same_function(src, taint, node, via) -> bool:
+    """True when the row was read in the same function that writes it out.
+
+    A CMS passes rows through layers of helpers that escape on the way, so a flow that leaves the
+    function it started in is a guess. One that does not is the shape stored XSS actually has."""
+    chain = taint.origin_chain(via)
+    if not chain:
+        return False
+    start = chain[0].line
+    scope = node
+    while scope is not None and scope.type not in taint.function_types:
+        scope = scope.parent
+    if scope is None:  # top-level script: the file is the scope
+        return True
+    return scope.start_point[0] + 1 <= start <= scope.end_point[0] + 1
+
+
 def _report(src, taint, node, rule_id, name, via, dynamic_msg=None, severity=None) -> Finding:
     rule = RULES[rule_id]
     impact_t, impact_d = IMPACT.get(rule_id, ("", ""))
     fix = FIXES.get((rule_id, src.family), "")
     if via and rule_id in VALIDATED_RULES and _validated(node, taint, via):
+        return None
+    if via and _second_hand(taint, via):
+        if rule_id == "ARX-XSS" and _same_function(src, taint, node, via):
+            # MEDIUM, not HIGH: the tool cannot see whether the value was checked on its way *into*
+            # the database, so this is a lead to follow rather than a proven flow.
+            return finding(rule, src, node, Severity.MEDIUM,
+                           f"A row read back from the database (`{taint.root(via)}`) is written into the page without "
+                           "escaping — whatever a user stored earlier runs as HTML now (stored XSS).",
+                           fix, taint, via)
         return None
     if via:
         sev = severity or (Severity.CRITICAL if rule_id in {"ARX-SQLI", "ARX-CMDI", "ARX-EVAL", "ARX-DESER", "ARX-SSTI", "ARX-LFI"}
@@ -550,6 +592,8 @@ def check(src: SourceFile, taint: PolyAnalyzer, disabled: frozenset[str] = froze
                 if _guarded(call, sink.rule, taint.function_types):
                     continue
                 via = taint.tainted_by(arg)
+                if via and _second_hand(taint, via) and not (sink.rule == "ARX-XSS" and _same_function(src, taint, call, via)):
+                    via = None  # a row is a stored-XSS source and nothing more: let the dynamic check decide
                 if via:
                     add(_report(src, taint, call, sink.rule, name, via))
                     break

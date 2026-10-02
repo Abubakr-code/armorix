@@ -17,6 +17,11 @@ def run(tmp_path, name, code):
 
 
 VULNERABLE = [
+    ("a.php", '<?php\n$row = mysqli_fetch_assoc($res);\nsystem("convert " . $row["file"]);\n', [("ARX-CMDI", H)]),
+    # stored XSS: the row holds whatever a user put there earlier
+    ("a.php", '<?php\nwhile ($row = mysqli_fetch_row($res)) {\n'
+              '  $name = $row[0];\n  echo "<div>Name: {$name}</div>";\n}\n', [("ARX-XSS", M)]),
+    ("a.php", '<?php\n$u = $pdo->query("SELECT bio FROM users")->fetchAll();\necho "<p>{$u[0]}</p>";\n', [("ARX-XSS", M)]),
     # a write driven by the URL: a GET request changes data, so any page can fire it
     ("a.php", '<?php\n$new = $_GET["pw"];\n'
               'mysqli_query($conn, "UPDATE users SET password = \'$new\' WHERE id = 1");\n',
@@ -118,6 +123,9 @@ VULNERABLE = [
 ]
 
 SAFE = [
+    # escaped on the way out, and used somewhere a row is not second-hand input
+    ("a.php", '<?php\nwhile ($row = mysqli_fetch_row($res)) {\n'
+              '  echo "<div>" . htmlspecialchars($row[0], ENT_QUOTES) . "</div>";\n}\n', "ARX-XSS"),
     # a token is checked, and a write driven by POST is not the CSRF finding
     ("a.php", '<?php\ncheckToken($_REQUEST["user_token"], $_SESSION["t"]);\n$new = $_GET["pw"];\n'
               '$q = "UPDATE users SET password = \'$new\' WHERE id = 1";\n', "ARX-CSRF"),
