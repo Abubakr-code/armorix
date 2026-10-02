@@ -17,6 +17,21 @@ def run(tmp_path, name, code):
 
 
 VULNERABLE = [
+    # the requester's own record, found by their session token, holds fields they wrote — Juice Shop's SSTI
+    ("a.js", "app.get('/p', async (req, res) => {\n  const me = sessions.get(req.cookies.token)\n"
+             "  const tpl = page.replace('_name_', me.username)\n  res.send(pug.compile(tpl)())\n})", [("ARX-SSTI", C)]),
+    # a startswith() elsewhere in the handler is not a check on this path
+    ("a.py", "def view():\n    f = request.args['f']\n    if page.startswith('<!DOCTYPE'):\n        pass\n"
+             "    return open(os.path.abspath(f)).read()", [("ARX-PATH", H)]),
+    # http.server: self.path is the request line
+    ("a.py", "class H(BaseHTTPRequestHandler):\n    def do_GET(self):\n        q = self.path.split('?')[1]\n"
+             "        os.system('nslookup ' + q)", [("ARX-CMDI", C)]),
+    # self.path means nothing outside an http.server handler: a built command (HIGH), never "untrusted input" (CRITICAL)
+    ("a.py", "class Repo:\n    def load(self):\n        os.system('git -C ' + self.path + ' status')", [("ARX-CMDI", H)]),
+    # a value delivered in a branch still reaches the sink after it
+    ("a.py", "def v(c):\n    q = 'safe'\n    if c:\n        q = request.args['q']\n    os.system('ls ' + q)", [("ARX-CMDI", C)]),
+    # the input used as the format string, not as a value
+    ("a.py", "def v():\n    t = request.args['t']\n    return t.format(user)", [("ARX-SSTI", H)]),
     # the legacy driver names count on a collection receiver
     ("a.js", "app.put('/r', (req, res) => db.reviewsCollection.update({ _id: req.body.id }, { $set: {} }));",
      [("ARX-NOSQL", H)]),
@@ -108,6 +123,11 @@ SAFE = [
              "  db.reviewsCollection.update({ _id: req.body.id }, { $set: {} });\n});"),
     ("a.js", "app.put('/r', (req, res) => db.reviewsCollection.update({ _id: String(req.body.id) }, { $set: {} }));"),
     ("a.js", "app.put('/u', (req, res) => user.update({ username: req.body.username }));"),
+    # the check is on the path itself
+    ("a.py", "def view():\n    full = os.path.realpath(os.path.join(BASE, request.args['f']))\n"
+             "    if not full.startswith(BASE):\n        abort(403)\n    return open(full).read()"),
+    # input as a value of the template is ordinary formatting
+    ("a.py", "def v():\n    return 'Hello {}'.format(request.args['n'])"),
     # comparing the whole value, and a list that is not an allow-list
     ("a.js", "for (const allowedUrl of redirectAllowlist) {\n  ok = ok || url === allowedUrl\n}"),
     ("a.js", "for (const w of searchWords) {\n  hit = hit || title.includes(w)\n}"),

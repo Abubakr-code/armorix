@@ -129,6 +129,22 @@ def call_parts(node: Node) -> tuple[str, str, list[Node]]:
     return obj, name, args
 
 
+# preg_replace('/[^a-zA-Z0-9_]/', '', $x) deletes everything outside a set of letters and digits —
+# what is left cannot carry a quote, a tag or a slash, so it is as clean as intval().
+_STRIP = re.compile(r"""^['"]([/#~!@%])\[\^([^\]]+)\]\+?\1[a-zA-Z]*['"]$""")
+_SAFE_CLASS = re.compile(r"^(?:a-z|A-Z|0-9|\\d|\\w|[A-Za-z0-9_ ]|\\-|-$)+$")
+
+
+def _whitelist_strip(pattern: Node, replacement: Node) -> bool:
+    m = _STRIP.match(text(pattern))
+    return bool(m and text(replacement) in {"''", '""'} and _SAFE_CLASS.match(m.group(2)))
+
+
+# Predicates and checks answer a question about their argument; they do not hand it back.
+# Not validate_*: WordPress's validate_blog_form() returns the submitted data alongside its verdict.
+VERDICT = re.compile(r"^(?:is|has|can|check|verify)_[a-z]\w*$|^(?:is|has|can)[A-Z]\w*$")
+
+
 class PolyAnalyzer(Analyzer):
     def __init__(self, src: SourceFile, inherited: dict[str, tuple[str, int]] | None = None):
         fam = src.family
@@ -160,7 +176,11 @@ class PolyAnalyzer(Analyzer):
             return bool(re.search(r"\b(int|integer|float|double|bool|boolean|long|short)\b", text(node.child_by_field_name("type") or node)))
         if node.type not in CALLS:
             return False
-        obj, name, _ = call_parts(node)
+        obj, name, a = call_parts(node)
+        if name == "preg_replace" and len(a) >= 3 and _whitelist_strip(a[0], a[1]):
+            return True
+        if VERDICT.match(name):
+            return True  # $ok = check_token($t): the result is a verdict about the input, not the input
         return name in SAFE or (name in {"valueOf", "parseInt", "parseLong", "fromString"} and obj in NUMERIC_WRAPPERS) or f"{obj}.{name}" in SAFE
 
     # strings
@@ -413,8 +433,9 @@ RULES = {r.id: r for r in ALL_RULES}
 # A tainted value that an enclosing (or earlier, bail-out) `if` validates is not reported: is_numeric, allow-lists, regexes …
 VALIDATOR = re.compile(r"is_numeric\(|is_int\(|ctype_digit\(|ctype_alnum\(|filter_var\(|preg_match\(|in_array\(|"
                        r"===?\s*['\"]|['\"]\s*===?|\.matches\(|Pattern\.matches|MatchString\(|\.Match\(|strconv\.Atoi|net\.ParseIP\(|"
-                       r"InetAddress|isValid\w*\(|validate\w*\(")
+                       r"InetAddress|isValid\w*\(|validate\w*\(|\w*_check_\w+\(|\bcheck_\w+\(|\w*is_valid\w*\(")
 VALIDATED_RULES = {"ARX-SQLI", "ARX-CMDI", "ARX-PATH", "ARX-LFI", "ARX-SSRF", "ARX-REDIRECT", "ARX-EVAL", "ARX-XSS"}
+LEAVES = re.compile(r"\b(?:exit|die|return|throw|panic)\b|http\.Error\(")
 BAIL = re.compile(r"\b(?:exit|die|return|throw|break|continue|panic)\b|http\.Error\(")
 
 
@@ -440,19 +461,35 @@ def _reaching_names(taint, names: set[str], at: Node) -> set[str]:
     return out
 
 
+def _discards(body: str, names: set[str]) -> bool:
+    """The guard's body leaves the function, or throws the checked value away:
+    `if (!is_numeric($c['port'])) { unset($c['port']); }` leaves the port either valid or absent."""
+    if LEAVES.search(body):
+        return True
+    m = re.search(r"\bunset\s*\(([^)]*)\)", body)
+    return bool(m and any(re.search(rf"(?<![\w$]){re.escape(n)}(?!\w)", m.group(1)) for n in names))
+
+
 def _validated(node: Node, taint, via) -> bool:
     names = _names(taint, via)
     if not names:
         return False
-    names |= _reaching_names(taint, names, node)
+    # follow the value back a few assignments: $hostname_value ← $port ← $credentials['port']
+    for _ in range(3):
+        more = _reaching_names(taint, names, node) - names
+        if not more:
+            break
+        names |= more
 
     def checks(cond: Node | None) -> bool:
         t = text(cond)
         return bool(cond is not None and VALIDATOR.search(t) and any(re.search(rf"(?<![\w$]){re.escape(n)}(?!\w)", t) for n in names))
 
-    cur = node.parent
+    # Start at the sink itself, not its parent: a sink written straight into the function body has
+    # its guard among its *own* earlier siblings, and starting one level up never looked there.
+    cur = node
     while cur is not None and cur.type not in taint.function_types:
-        if cur.type == "if_statement" and checks(cur.child_by_field_name("condition")):
+        if cur is not node and cur.type == "if_statement" and checks(cur.child_by_field_name("condition")):
             return True  # the sink sits inside `if (is_numeric($x)) { … }`
         parent = cur.parent
         if parent is not None:  # an earlier `if (!valid($x)) { exit; }` in the same block
@@ -461,6 +498,12 @@ def _validated(node: Node, taint, via) -> bool:
                     break
                 if sib.type == "if_statement" and checks(sib.child_by_field_name("condition")) and BAIL.search(text(sib)):
                     return True
+                # …or nested inside an earlier block, when the bail-out leaves the whole function:
+                # `if ($cb) { if (!wp_check_jsonp_callback($cb)) { return $error; } }`
+                for inner in walk(sib):
+                    if inner.type == "if_statement" and inner is not sib and checks(inner.child_by_field_name("condition")) \
+                            and _discards(text(inner.child_by_field_name("body") or inner), names):
+                        return True
         cur = parent
     return False
 

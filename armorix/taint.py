@@ -54,6 +54,10 @@ PY_SOURCE = re.compile(
     r"|^sys\.argv\b"
     r"|^input\("
 )
+HANDLER_CLASS = re.compile(r"^\s*class\s+\w+\s*\([^)]*\b(?:Base|SimpleHTTP|CGIHTTP)?HTTPRequestHandler\b", re.M)
+PY_HANDLER_SOURCE = re.compile(PY_SOURCE.pattern + r"|^self\.(?:path|headers|rfile|requestline|raw_requestline)\b")
+# Calls whose first argument is a name (a hook, an action) rather than data that flows into the result.
+NAME_FIRST = {"apply_filters", "apply_filters_ref_array", "apply_filters_deprecated", "do_action", "do_action_ref_array"}
 SOURCE_TYPES = {"member_expression", "attribute", "call", "call_expression", "subscript", "subscript_expression"}
 
 # Casting to a number (or a UUID / ObjectId) leaves nothing to inject; so does hashing —
@@ -130,7 +134,14 @@ class Analyzer:
         self._propagate()
 
     def source_pattern(self) -> re.Pattern:
-        return JS_SOURCE if self.family == "js" else PY_SOURCE
+        if self.family == "js":
+            return JS_SOURCE
+        # The standard library's own server: in a BaseHTTPRequestHandler subclass `self.path` is the
+        # raw request line and `self.headers` / `self.rfile` the rest of the request. `self.path` means
+        # nothing in any other class, so this only applies where such a handler is declared.
+        if HANDLER_CLASS.search(self.src.text):
+            return PY_HANDLER_SOURCE
+        return PY_SOURCE
 
     def assignment_fields(self) -> dict:
         return ASSIGN.get(self.family, {})
@@ -196,22 +207,29 @@ class Analyzer:
         defs = self._defs.get(key) if hasattr(self, "_defs") else None
         if not defs:
             return False
-        best = None
+        best, best_at = None, -1
         for start, block, value, plain in defs:
             if start >= use.start_byte:
                 break
             if block is not None and block.start_byte <= use.start_byte < block.end_byte:
-                best = (value, plain)
+                best, best_at = (value, plain), start
         if best is None or not best[1]:
             return False
-        value = best[0]
-        if value.id in self._checking:
+        # A later assignment inside a branch (`if c: q = request.args["q"]`) does not dominate the use,
+        # but it *may* reach it — so it cannot be ignored just because the last unconditional one was clean.
+        later = [(value, plain) for start, block, value, plain in defs if best_at < start < use.start_byte]
+        if any(not plain for _, plain in later):
             return False
-        self._checking.add(value.id)
-        try:
-            return self.tainted_by(value) is None
-        finally:
-            self._checking.discard(value.id)
+        for value in [best[0]] + [v for v, _ in later]:
+            if value.id in self._checking:
+                return False
+            self._checking.add(value.id)
+            try:
+                if self.tainted_by(value) is not None:
+                    return False
+            finally:
+                self._checking.discard(value.id)
+        return True
 
     def _record_defs(self, assignments) -> None:
         self._defs: dict[tuple, list] = {}
@@ -251,6 +269,12 @@ class Analyzer:
                 ret = self._return_key(n)
                 if ret:
                     return Var(text(n), ret)
+                # Not narrowed for lookups: sessions.get(req.cookies.token) returns the *requester's own*
+                # record, whose fields (username, bio …) they wrote themselves — Juice Shop's SSTI is that.
+                if self._callee_name(n)[1] in NAME_FIRST:
+                    # apply_filters("hook_{$action}", $value): the first argument names a hook, it is not the value
+                    stack.extend(reversed(self.call_arguments(n)[0][1:]))
+                    continue
             if n.type in self.name_types and n.type != "shorthand_property_identifier_pattern":
                 key = self._lookup(self.tainted, text(n), n)
                 if key and not self._clean_here(key, n):
@@ -428,8 +452,27 @@ class Analyzer:
             target, value = (node.child_by_field_name(f) for f in fields)
             if target is None or value is None:
                 continue
+            # `code, content, params = OK, PAGE, dict(query)` pairs up element by element; treating the
+            # right side as one value would taint `code` and `content` along with `params`.
+            pairs = self._paired(target, value)
+            if pairs:
+                for t, v in pairs:
+                    yield node, [(text(n), n) for n in walk(t) if n.type in self.name_types], v
+                continue
             names = [(text(n), n) for n in walk(target) if n.type in self.name_types]
             yield node, names, value
+
+    TUPLES = {"pattern_list", "tuple_pattern", "expression_list", "tuple", "array_pattern", "array"}
+
+    def _paired(self, target, value):
+        if target.type not in self.TUPLES or value.type not in self.TUPLES:
+            return None
+        left = [c for c in target.named_children if c.type != "comment"]
+        right = [c for c in value.named_children if c.type != "comment"]
+        if len(left) != len(right) or len(left) < 2 or any(c.type in {"list_splat_pattern", "rest_pattern", "list_splat",
+                                                                        "spread_element"} for c in left + right):
+            return None
+        return list(zip(left, right))
 
     def _taint(self, key: tuple, origin: Origin) -> bool:
         if key in self.tainted:

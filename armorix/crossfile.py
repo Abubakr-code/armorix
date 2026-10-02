@@ -50,9 +50,16 @@ def _bound_in(text: str, name: str) -> bool:
     return any(re.search(pattern % n, text) for pattern in _BINDINGS)
 
 
-def php_sources(files: list[tuple[Path, str]]) -> dict[str, tuple[str, int]]:
-    """{variable name: (file it was filled in, line)} for names filled straight from a superglobal."""
-    found: dict[str, tuple[str, int]] = {}
+INCLUDE = re.compile(r"\b(?:include|require)(?:_once)?\b[^;]{0,240}", re.IGNORECASE)
+
+
+def _includes(text: str) -> str:
+    return " ".join(m.group(0) for m in INCLUDE.finditer(text))
+
+
+def php_sources(files: list[tuple[Path, str]]) -> dict[str, tuple[str, int, str]]:
+    """{name: (file it was filled in, line, that file's include statements)} for names filled from a superglobal."""
+    found: dict[str, tuple[str, int, str]] = {}
     for path, rel in files[:MAX_FILES]:
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
@@ -62,17 +69,33 @@ def php_sources(files: list[tuple[Path, str]]) -> dict[str, tuple[str, int]]:
             name = m.group(1)
             if name in found or GUARDED.search(text[max(0, m.start() - 300):m.start()]):
                 continue
-            found[name] = (rel, text.count("\n", 0, m.start()) + 1)
+            found[name] = (rel, text.count("\n", 0, m.start()) + 1, _includes(text))
     return found
 
 
-def inherited_for(text: str, rel: str, sources: dict[str, tuple[str, int]]) -> dict[str, tuple[str, int]]:
-    """The names this file uses but never binds — so they can only have come from an include."""
+def _linked(using_rel: str, using_includes: str, source_rel: str, source_includes: str) -> bool:
+    """The two files are the two halves of one include: one of them pulls the other in.
+
+    Matched loosely on purpose — DVWA includes "source/{$level}.php", so the directory has to count —
+    but two unrelated pages of a big app that happen to share a variable name are not linked."""
+    s_name, u_name = source_rel.rsplit("/", 1)[-1], using_rel.rsplit("/", 1)[-1]
+    s_dir = source_rel.rsplit("/", 1)[0] if "/" in source_rel else ""
+    s_dir_last = s_dir.rsplit("/", 1)[-1]
+    return (s_name in using_includes or u_name in source_includes
+            or bool(s_dir_last and f"{s_dir_last}/" in using_includes))
+
+
+def inherited_for(text: str, rel: str, sources: dict) -> dict[str, tuple[str, int]]:
+    """The names this file uses but never binds, and that a file it is included with filled from the request."""
     out = {}
-    for name, (where, line) in sources.items():
+    mine = None
+    for name, (where, line, their_includes) in sources.items():
         if where == rel or f"${name}" not in text:
             continue
         if _bound_in(text, name):
+            continue
+        mine = _includes(text) if mine is None else mine
+        if not _linked(rel, mine, where, their_includes):
             continue
         out[name] = (where, line)
     return out

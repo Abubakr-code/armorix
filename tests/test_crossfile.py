@@ -30,7 +30,7 @@ def test_include_of_a_variable_filled_in_another_file(tmp_path):
 def test_trace_names_the_file_that_filled_it(tmp_path):
     write(tmp_path, {
         "a.php": "<?php\n$page = $_GET['p'];\n",
-        "b.php": "<?php\ninclude($page);\n",
+        "b.php": "<?php\nrequire 'a.php';\ninclude($page);\n",
     })
     lfi = next(f for f in scan(tmp_path, deps=False).findings if f.rule_id == "ARX-LFI")
     assert "a.php" in lfi.message
@@ -65,7 +65,24 @@ def test_a_value_checked_before_it_is_stored_is_not_a_source(tmp_path):
 def test_sources_pass_reports_where_the_value_came_from(tmp_path):
     write(tmp_path, {"x.php": "<?php\n\n$id = $_POST['id'];\n"})
     found = crossfile.php_sources([(tmp_path / "x.php", "x.php")])
-    assert found == {"id": ("x.php", 3)}
+    assert {k: v[:2] for k, v in found.items()} == {"id": ("x.php", 3)}
+
+
+def test_two_unrelated_pages_sharing_a_name_are_not_linked(tmp_path):
+    # WordPress: wp-signup.php fills $user_email from $_POST; options-discussion.php uses an unrelated $user_email
+    write(tmp_path, {
+        "signup.php": "<?php\n$user_email = $_POST['email'];\n",
+        "options.php": "<?php\necho \"<p>$user_email</p>\";\n",
+    })
+    assert not [f for f in scan(tmp_path, deps=False).findings if f.rule_id == "ARX-XSS"]
+
+
+def test_a_view_included_by_the_controller_inherits_its_variables(tmp_path):
+    write(tmp_path, {
+        "controller.php": "<?php\n$name = $_GET['n'];\ninclude 'view.php';\n",
+        "view.php": "<?php\necho \"<h1>$name</h1>\";\n",
+    })
+    assert [f for f in scan(tmp_path, deps=False).findings if f.rule_id == "ARX-XSS" and f.file == "view.php"]
 
 
 # ── <script> inside a PHP page ──────────────────────────────────

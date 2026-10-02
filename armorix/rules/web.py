@@ -52,7 +52,34 @@ class ReflectedXss(CallSinkRule):
         if src.family == "js":
             out += self._dom(src, taint)
         else:
-            out += self._py_return(src, taint)
+            out += self._py_return(src, taint) + self._py_wfile(src, taint)
+        return out
+
+    def _py_wfile(self, src, taint):
+        """`self.wfile.write(page)` in an http.server handler is the response body."""
+        out = []
+        if taint is None or "wfile" not in src.text:
+            return out
+        for call in calls(src):
+            fn = call.child_by_field_name("function")
+            if fn is None or fn.type != "attribute" or text(fn) not in {"self.wfile.write", "wfile.write"}:
+                continue
+            a = args(call)
+            scope = call
+            while scope is not None and scope.type != "function_definition":
+                scope = scope.parent
+            body = text(scope) if scope is not None else src.text
+            # only a page that is served as HTML can run script; JSON and text/plain responses cannot
+            if not a or not re.search(r"text/html|<!DOCTYPE|<html", body, re.I):
+                continue
+            via = taint.tainted_by(a[0])
+            # str.encode() only turns text into bytes for the socket — it is not "encode(" the sanitiser
+            body_text = re.sub(r"\.encode\(", ".", text(a[0]))
+            if via and not any(s in body_text for s in XSS_SANITIZERS):
+                out.append(finding(self, src, call, Severity.HIGH,
+                                   f"Untrusted input `{taint.root(via)}` is written into the HTML response without escaping.",
+                                   "Escape every value that goes into the page with html.escape(value, quote=True).", taint, via))
+                break
         return out
 
     def _dom(self, src, taint):
@@ -136,6 +163,27 @@ class TemplateInjection(CallSinkRule):
     def weak(self, taint, arg):
         return not taint.is_dynamic_string(arg)  # a template read from a file / setting is normal; one built from strings is not
 
+    def check(self, src, taint):
+        out = super().check(src, taint)
+        if src.family == "py" and taint is not None:
+            # `user_text.format(obj)` lets the *text* walk the object: "{0.__class__.__init__.__globals__}".
+            # Only the receiver matters — "fixed {}".format(user_text) is ordinary formatting.
+            for call in calls(src):
+                fn = call.child_by_field_name("function")
+                if fn is None or fn.type != "attribute" or text(fn.child_by_field_name("attribute")) not in {"format", "format_map"}:
+                    continue
+                template = fn.child_by_field_name("object")
+                if template is None or taint.is_literal(template):
+                    continue
+                via = taint.tainted_by(template)
+                if via and args(call):
+                    out.append(finding(self, src, call, Severity.HIGH,
+                                       f"Untrusted input `{taint.root(via)}` is used as the format string — "
+                                       "`{0.__class__…}` reads attributes and globals of the objects passed in.",
+                                       "Use the input as a value, never as the template: \"Hello {}\".format(name).",
+                                       taint, via))
+        return out
+
     def matches(self, src, call):
         obj, name = callee(call)
         if src.family == "js" and name == "compile" and obj not in {"handlebars", "Handlebars", "ejs", "pug", "_"}:
@@ -197,6 +245,26 @@ class OpenRedirect(CallSinkRule):
     description = "Users are redirected to a URL taken from the request, enabling phishing."
     sinks = {"js": {(r, "redirect") for r in RES}, "py": {("", "redirect"), ("flask", "redirect"), ("", "HttpResponseRedirect")}}
     tainted = Severity.MEDIUM
+
+    def check(self, src, taint):
+        out = super().check(src, taint)
+        if taint is None:
+            return out
+        # send_header("Location", x) / res.setHeader("Location", x) / headers["Location"] = x
+        for call in calls(src):
+            _, name = callee(call)
+            a = args(call)
+            if name not in {"send_header", "setHeader", "set_header", "header", "writeHead"} or len(a) < 2:
+                continue
+            if text(a[0]).strip("'\"").lower() != "location" or self.SAME_ORIGIN.match(self._literal_prefix(a[1])):
+                continue
+            via = taint.tainted_by(a[1])
+            if via:
+                out.append(finding(self, src, call, Severity.MEDIUM,
+                                   f"The Location header comes from `{taint.root(via)}` — attackers can send victims "
+                                   "to a phishing site via your domain.", "Redirect only to relative paths or an allow-list of URLs.",
+                                   taint, via))
+        return out
     sanitizers = ("url_for", "is_safe_url", "url_has_allowed_host_and_scheme")
     msg_tainted = "Redirect target comes from `{src}` — attackers can send victims to a phishing site via your domain."
     fix = {"js": "Redirect only to relative paths or an allow-list of URLs.",

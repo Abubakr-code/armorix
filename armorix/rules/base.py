@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
+
 from tree_sitter import Node
 
 from ..finding import Finding, Severity, TraceStep
-from ..parsing import SourceFile, line_of, text
+from ..parsing import SourceFile, line_of, text, walk
 from ..taint import Analyzer
 
 CALLS = {"call_expression", "call", "new_expression"}
@@ -136,14 +138,50 @@ class CallSinkRule(Rule):
         """An untainted argument that is not worth a lower-confidence finding."""
         return False
 
-    def guarded(self, call: Node) -> bool:
+    def guarded(self, call: Node, arg: Node | None = None) -> bool:
+        """A check written in the same function — on a line that is about this value.
+
+        Matching the guard anywhere in the function made `content.startswith("<!DOCTYPE")` count as
+        validating an unrelated `open(params["path"])` three branches away."""
         if not self.guards:
             return False
         node = call.parent
         while node is not None and node.type not in FUNCTION_TYPES:
             node = node.parent
         body = text(node) if node is not None else ""
-        return any(g.search(body) if hasattr(g, "search") else g in body for g in self.guards)
+        names = self._value_names(arg) if arg is not None else set()
+        mentions = lambda t: not names or any(re.search(rf"(?<![\w.$]){re.escape(n)}\b", t) for n in names)  # noqa: E731
+        for g in self.guards:
+            if hasattr(g, "search"):
+                if any(mentions(line) for line in body.splitlines() if g.search(line)):
+                    return True
+            elif g.startswith("."):
+                # `full.startswith(base)`: the value being checked is the receiver, right before the dot
+                for m in re.finditer(r"([\w$.\[\]'\"()]{1,80})" + re.escape(g), body):
+                    if mentions(m.group(1)):
+                        return True
+            else:
+                for line in body.splitlines():
+                    if g in line and mentions(line):
+                        return True
+        return False
+
+    @staticmethod
+    def _value_names(arg: Node) -> set[str]:
+        """Variables the argument is built from — not attribute or function names (`os`, `path`, `abspath`)."""
+        out = set()
+        for n in walk(arg):
+            if n.type not in {"identifier", "variable_name"}:
+                continue
+            parent = n.parent
+            if parent is not None and parent.type in {"attribute", "member_expression"} and \
+                    parent.child_by_field_name("object") is not n:
+                continue  # .abspath, .path — a property, not a value
+            if parent is not None and parent.type in {"call", "call_expression"} and parent.child_by_field_name("function") is n:
+                continue  # open(…), FETCH(…) — the function, not the value
+            out.add(text(n))
+        out -= {"os", "sys", "io", "path", "shutil", "fs", "Path", "this", "self"}
+        return out
 
     def check(self, src, taint):
         out = []
@@ -153,7 +191,7 @@ class CallSinkRule(Rule):
             arg = self.target(call)
             if arg is None or taint.is_literal(arg) or self.skip(src, call, arg):
                 continue
-            if any(s in text(arg) for s in self.sanitizers) or self.guarded(call):
+            if any(s in text(arg) for s in self.sanitizers) or self.guarded(call, arg):
                 continue
             name = callee(call)[1]
             fix = self.fix.get(src.family, "")
