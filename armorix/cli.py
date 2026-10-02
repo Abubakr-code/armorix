@@ -403,11 +403,11 @@ def _hook(ns) -> int:
         return 2
     hook = (Path(ns.path) / top.stdout.decode().strip()).resolve() / "pre-commit"
     if ns.action == "uninstall":
-        if hook.exists() and HOOK_MARK in hook.read_text():
+        if hook.exists() and HOOK_MARK in hook.read_text(encoding="utf-8", errors="replace"):
             hook.unlink()
             print(f"removed {hook}")
         return 0
-    if hook.exists() and HOOK_MARK not in hook.read_text():
+    if hook.exists() and HOOK_MARK not in hook.read_text(encoding="utf-8", errors="replace"):
         print(f"{hook} already exists — add this line to it:\n  {sys.executable} -m armorix scan --staged --fail-on {ns.fail_on}", file=sys.stderr)
         return 1
     hook.parent.mkdir(parents=True, exist_ok=True)

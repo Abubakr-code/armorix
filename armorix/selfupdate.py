@@ -105,7 +105,8 @@ def update(log=print) -> str:
         log(f"downloading {name} ({info['version']})")
         _download(info["assets"][name], archive)
         _download(info["assets"]["SHA256SUMS"], sums)
-        expected = next((line.split()[0] for line in sums.read_text().splitlines() if line.strip().endswith(" " + name)), None)
+        expected = next((line.split()[0] for line in sums.read_text(encoding="utf-8", errors="replace").splitlines()
+                         if line.strip().endswith(" " + name)), None)
         actual = hashlib.sha256(archive.read_bytes()).hexdigest()
         if expected != actual:
             raise UpdateError("checksum mismatch — download corrupted or tampered with; nothing was changed")

@@ -160,6 +160,21 @@ def test_the_readme_table_lists_every_rule():
     import re
     from pathlib import Path
     readme = Path(__file__).resolve().parent.parent / "README.md"
-    listed = set(re.findall(r"^\| (ARX-[A-Z0-9-]+)", readme.read_text(), re.M))
+    listed = set(re.findall(r"^\| (ARX-[A-Z0-9-]+)", readme.read_text(encoding="utf-8"), re.M))
     missing = sorted(r.id for r in ALL_RULES if r.id not in listed)
     assert not missing, f"README is missing: {missing}"
+
+
+def test_no_file_is_read_without_an_encoding():
+    """Windows defaults to cp1252, so `read_text()` with no encoding crashes on any UTF-8 file.
+
+    It cost a release: a user's own git hook or a checksum file is enough to trigger it."""
+    import re
+    from pathlib import Path
+    engine = Path(__file__).resolve().parent.parent / "armorix"
+    bad = []
+    for py in engine.rglob("*.py"):
+        for i, line in enumerate(py.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r"\.read_text\(\s*\)|open\([^)]*\)\.read\(\)", line) and "encoding" not in line:
+                bad.append(f"{py.name}:{i}")
+    assert not bad, f"read without an explicit encoding: {bad}"
