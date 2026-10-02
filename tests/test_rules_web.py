@@ -19,7 +19,7 @@ def run(tmp_path, name, code):
 VULNERABLE = [
     # the requester's own record, found by their session token, holds fields they wrote — Juice Shop's SSTI
     ("a.js", "app.get('/p', async (req, res) => {\n  const me = sessions.get(req.cookies.token)\n"
-             "  const tpl = page.replace('_name_', me.username)\n  res.send(pug.compile(tpl)())\n})", [("ARX-SSTI", C)]),
+             "  const tpl = page.replace('_name_', me.username)\n  res.send(pug.compile(tpl)())\n})", [("ARX-SSTI", C), ("ARX-XSS", H)]),
     # a startswith() elsewhere in the handler is not a check on this path
     ("a.py", "def view():\n    f = request.args['f']\n    if page.startswith('<!DOCTYPE'):\n        pass\n"
              "    return open(os.path.abspath(f)).read()", [("ARX-PATH", H)]),
