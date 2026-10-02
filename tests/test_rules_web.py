@@ -17,6 +17,9 @@ def run(tmp_path, name, code):
 
 
 VULNERABLE = [
+    # the legacy driver names count on a collection receiver
+    ("a.js", "app.put('/r', (req, res) => db.reviewsCollection.update({ _id: req.body.id }, { $set: {} }));",
+     [("ARX-NOSQL", H)]),
     # an allow-list entry matched anywhere in the value: https://evil.com/?r=https://ok.example passes
     ("a.js", "for (const allowedUrl of redirectAllowlist) {\n  ok = ok || url.includes(allowedUrl)\n}", [("ARX-ALLOWLIST", M)]),
     ("a.js", "const ok = allowedOrigins.some(o => req.headers.origin.indexOf(o) !== -1)", [("ARX-ALLOWLIST", M)]),
@@ -100,6 +103,11 @@ SAFE = [
     ("a.py", "app.run(debug=os.environ.get('DEBUG') == '1')"),
     ("a.py", 'img = Image.open(request.files["img"])'),
     ("a.py", 'webbrowser.open(request.args["u"])'),
+    # a type check, a String() cast, and an ORM model that merely shares the method name
+    ("a.js", "app.put('/r', (req, res) => {\n  if (typeof req.body.id !== 'string') return res.status(400).send();\n"
+             "  db.reviewsCollection.update({ _id: req.body.id }, { $set: {} });\n});"),
+    ("a.js", "app.put('/r', (req, res) => db.reviewsCollection.update({ _id: String(req.body.id) }, { $set: {} }));"),
+    ("a.js", "app.put('/u', (req, res) => user.update({ username: req.body.username }));"),
     # comparing the whole value, and a list that is not an allow-list
     ("a.js", "for (const allowedUrl of redirectAllowlist) {\n  ok = ok || url === allowedUrl\n}"),
     ("a.js", "for (const w of searchWords) {\n  hit = hit || title.includes(w)\n}"),

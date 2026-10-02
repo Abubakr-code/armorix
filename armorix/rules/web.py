@@ -11,7 +11,7 @@ from .base import CallSinkRule, Rule, args, callee, calls, finding, kwarg
 XSS_SANITIZERS = ("DOMPurify", "sanitize", "escape", "xss(", "encode(", "bleach")
 # `this.sanitizer.bypassSecurityTrustHtml(x)` tells Angular to trust x — the name contains
 # "sanitize", so it has to be recognised before XSS_SANITIZERS clears the line.
-BYPASS_SANITIZER = re.compile(r"bypassSecurityTrust(?:Html|Script|Style|Url|ResourceUrl)")
+BYPASS_SANITIZER = re.compile(r"bypassSecurityTrust\w*")
 RES = ("res", "response", "reply")
 FS_OBJECTS = ("fs", "fsp", "fs.promises", "promises", "fse", "fsPromises")
 FS_CALLS = ("readFile", "readFileSync", "createReadStream", "writeFile", "writeFileSync", "appendFile",
@@ -229,13 +229,24 @@ class NoSqlInjection(Rule):
     description = "Request data is used directly as a MongoDB query, so {$ne: null} style operators bypass checks."
     families = ("js",)
     METHODS = {"find", "findOne", "findOneAndUpdate", "findOneAndDelete", "updateOne", "updateMany",
-               "deleteOne", "deleteMany", "countDocuments", "exists", "findById"}
+               "deleteOne", "deleteMany", "countDocuments", "exists", "findById",
+               "replaceOne", "findAndModify", "bulkWrite"}
+    # The legacy driver names are ordinary words — `user.update({…})` is Sequelize, not Mongo —
+    # so they only count on a receiver that looks like a collection.
+    LEGACY = {"update", "remove", "count", "distinct"}
+    MONGOISH = re.compile(r"(?i)collection|(?:^|\.)db(?:\.|$)|mongo")
+    # `typeof id !== 'string'` and `String(id)` both make an operator object impossible.
+    TYPE_CHECK = "typeof"
     FIX = "Cast every field to the expected type (String(req.body.user)) or validate with a schema (zod / joi); never pass req.body as a query."
 
     def check(self, src, taint):
         out = []
         for call in calls(src):
-            if callee(call)[1] not in self.METHODS:
+            obj, method = callee(call)
+            if method in self.LEGACY:
+                if not self.MONGOISH.search(obj or ""):
+                    continue
+            elif method not in self.METHODS:
                 continue
             a = args(call)
             if not a:
@@ -248,7 +259,7 @@ class NoSqlInjection(Rule):
                     key, value = text(pair.child_by_field_name("key")).strip("'\""), pair.child_by_field_name("value")
                     if key == "$where":
                         continue  # handled below, where the severity follows the taint
-                    if value is not None and taint.is_source(value):
+                    if value is not None and taint.is_source(value) and not self._typed(src, call, text(value)):
                         out.append(finding(self, src, call, Severity.HIGH,
                                            f"`{text(value)}` is used as a query value without type casting — an object like "
                                            '{"$ne": null} bypasses the check.', self.FIX))
@@ -257,6 +268,19 @@ class NoSqlInjection(Rule):
                                             and taint.root(taint.tainted_by(query)) in {"req.body", "req.query"}):
                 out.append(finding(self, src, call, Severity.HIGH,
                                    f"The whole request object `{text(query)}` is used as a database query.", self.FIX))
+        return self._finish(src, taint, out)
+
+    def _typed(self, src, call, value: str) -> bool:
+        """True when the enclosing function pins the value to a string, so no operator object fits."""
+        scope = call
+        while scope is not None and scope.type not in FUNCTIONS:
+            scope = scope.parent
+        body = text(scope) if scope is not None else src.text
+        base = value.strip()
+        return bool(re.search(rf"typeof\s+{re.escape(base)}\s*[!=]==?\s*['\"]string['\"]", body)
+                    or re.search(rf"\bString\(\s*{re.escape(base)}\s*\)", body))
+
+    def _finish(self, src, taint, out):
         # `$where` built anywhere (a query helper, a criteria function) — not only inline in find()
         reported = {f.line for f in out}
         for node in src.nodes:
