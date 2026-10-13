@@ -1,0 +1,89 @@
+# Runs on every push and pull request, so a regression is caught before a tag is pushed — not while a release is built.
+#   tests      unit + fixture tests on Linux, Windows and macOS
+#   vscode     the VS Code extension, inside a real VS Code, on all three systems
+#   benchmark  accuracy on real vulnerable apps (OWASP NodeGoat, DVWA, Vulpy): documented flaws found, secure code quiet
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, python: "3.11" }
+          - { os: ubuntu-24.04, python: "3.13" }
+          - { os: windows-latest, python: "3.12" }
+          - { os: macos-14, python: "3.12" }
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: "1"   # Windows defaults to cp1252; users' files and our messages are UTF-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e ".[dev]"
+      - run: python -m pytest -q
+
+  vscode:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the extension's dev dependencies
+        working-directory: vscode
+        run: npm ci
+      - name: Point the test at the installed CLI
+        shell: bash
+        run: echo "ARMORIX_PATH=$(python -c 'import shutil; print(shutil.which("armorix"))')" >> "$GITHUB_ENV"
+      - name: Extension tests (Linux needs a virtual display)
+        if: runner.os == 'Linux'
+        working-directory: vscode
+        run: xvfb-run -a -s "-screen 0 1440x900x24" npm test
+      - name: Extension tests
+        if: runner.os != 'Linux'
+        working-directory: vscode
+        run: npm test
+
+  benchmark:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: Check out the benchmark projects at their pinned commits
+        run: |
+          python - <<'PY'
+          import subprocess, sys
+          sys.path.insert(0, "tests")
+          from benchmark import PINS
+          for name, (url, sha) in PINS.items():
+              subprocess.run(["git", "init", "-q", f"bench/{name}"], check=True)
+              subprocess.run(["git", "-C", f"bench/{name}", "fetch", "-q", "--depth", "1", url, sha], check=True)
+              subprocess.run(["git", "-C", f"bench/{name}", "checkout", "-q", "FETCH_HEAD"], check=True)
+          PY
+      - run: python tests/benchmark.py bench

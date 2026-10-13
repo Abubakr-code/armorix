@@ -276,6 +276,15 @@ RULES.update({
                "Экранируйте значение (_.escapeRegExp / re.escape) или сравнивайте как обычный текст (includes / in)."),
         "en": ("Regular expression injection (ReDoS)", "", ""),
     },
+    "ARX-REDOS": {
+        "uz": ("Regex'da katastrofik backtracking (ReDoS)",
+               "Qat'iy regulyar ifoda bir xil matnni ko'p usulda mos qila oladigan guruhni cheksiz takrorlaydi — qisqa maxsus satr jarayonni muzlatib qo'yadi.",
+               "Ichma-ich kvantifikatorni olib tashlang (`([0-9]+)+` → `[0-9]+`), naqshni langarlang yoki chiziqli vaqtli dvigateldan (RE2) foydalaning."),
+        "ru": ("Регулярное выражение с катастрофическим бэктрекингом (ReDoS)",
+               "Фиксированное регулярное выражение бесконечно повторяет группу, которая сопоставляет один и тот же текст многими способами, — короткая специальная строка подвешивает процесс.",
+               "Уберите вложенный квантификатор (`([0-9]+)+` → `[0-9]+`), привяжите шаблон якорями или используйте движок с линейным временем (RE2)."),
+        "en": ("Regular expression with catastrophic backtracking (ReDoS)", "", ""),
+    },
     "ARX-COOKIE": {
         "uz": ("Sessiya cookie'sida HttpOnly / Secure yo'q", "Sessiya yoki token cookie'sini JavaScript o'qiy oladi (XSS orqali o'g'irlanadi) yoki u shifrlanmagan HTTP orqali yuboriladi.",
                "Sessiya va token cookie'lariga httpOnly: true, secure: true va sameSite: 'lax' qo'ying."),
@@ -475,6 +484,52 @@ def detect(explicit: str | None = None) -> str:
     return env if env in LANGS else "en"
 
 
+UI["uz"].update({
+    "review": "ko'rib chiqing", "not_checked": "Tekshirilmadi", "stage_status": "{stage}: {status}{why}",
+    "conf_hidden": "{n} ta kamroq ishonchli topilma yashirildi (--min-confidence {m})",
+    "confidence": "ishonch: {c}",
+})
+UI["ru"].update({
+    "review": "требует проверки", "not_checked": "Не проверено", "stage_status": "{stage}: {status}{why}",
+    "conf_hidden": "скрыто находок с меньшей достоверностью: {n} (--min-confidence {m})",
+    "confidence": "достоверность: {c}",
+})
+UI["en"].update({
+    "review": "needs review", "not_checked": "Not checked", "stage_status": "{stage}: {status}{why}",
+    "conf_hidden": "{n} lower-confidence findings hidden (--min-confidence {m})",
+    "confidence": "confidence: {c}",
+})
+STAGES = {
+    "uz": {"code": "kod", "dependencies": "paketlar", "history": "git tarixi", "ai_review": "AI tekshiruv"},
+    "ru": {"code": "код", "dependencies": "зависимости", "history": "история git", "ai_review": "AI-проверка"},
+    "en": {"code": "code", "dependencies": "dependencies", "history": "git history", "ai_review": "AI review"},
+}
+STATUS = {
+    "uz": {"skipped": "o'tkazib yuborildi", "cancelled": "bekor qilindi", "completed_with_errors": "xatolar bilan tugadi"},
+    "ru": {"skipped": "пропущено", "cancelled": "отменено", "completed_with_errors": "завершено с ошибками"},
+    "en": {"skipped": "skipped", "cancelled": "cancelled", "completed_with_errors": "completed with errors"},
+}
+
+
+REASONS = {
+    "not requested (use `armorix scan --deep`)": {
+        "uz": "so'ralmagan (`armorix scan --deep` ishlating)", "ru": "не запрошено (используйте `armorix scan --deep`)"},
+    "offline vulnerability database (OSV) is not installed": {
+        "uz": "oflayn zaiflik bazasi (OSV) o'rnatilmagan", "ru": "офлайн-база уязвимостей (OSV) не установлена"},
+    "local AI engine is not available": {
+        "uz": "lokal AI dvigateli mavjud emas", "ru": "локальный AI-движок недоступен"},
+    "scan was cancelled": {"uz": "skanerlash bekor qilindi", "ru": "сканирование отменено"},
+    "rule ARX-DEP is disabled": {"uz": "ARX-DEP qoidasi o'chirilgan", "ru": "правило ARX-DEP отключено"},
+    "disabled by the caller": {"uz": "chaqiruvchi o'chirgan", "ru": "отключено вызывающей стороной"},
+}
+
+
+def stage_line(lang: str, stage: str, status: str, reason: str = "") -> str:
+    reason = REASONS.get(reason, {}).get(lang, reason)
+    why = f" — {reason}" if reason else ""
+    return ui(lang, "stage_status", stage=STAGES[lang].get(stage, stage), status=STATUS[lang].get(status, status), why=why)
+
+
 def ui(lang: str, key: str, **kw) -> str:
     return UI[lang][key].format(**kw)
 
@@ -485,6 +540,28 @@ def severity(lang: str, sev: Severity) -> str:
 
 # One rule can have two genuinely different fixes. The rule-level translation covers the common
 # case; a finding that needs its own says so with data["fix_key"], and loses nothing in uz / ru.
+# MD5 / SHA-1 means different things depending on what it protects (polyglot._java_digest sets `context`).
+WEAKHASH_CONTEXT = {
+    "password": {
+        "uz": ("Parol zaif hash bilan saqlanmoqda",
+               "Parol MD5 / SHA-1 bilan hash qilinmoqda — tuzsiz tezkor hash soniyada milliardlab variantda buziladi.",
+               "Parollarni BCrypt / Argon2 (Spring Security PasswordEncoder) bilan saqlang va mavjud foydalanuvchilarni keyingi kirishda qayta hash qiling."),
+        "ru": ("Пароль хранится со слабым хешем",
+               "Пароль хешируется MD5 / SHA-1 — быстрый хеш без соли подбирается миллиардами вариантов в секунду.",
+               "Храните пароли через BCrypt / Argon2 (Spring Security PasswordEncoder) и перехешируйте текущих пользователей при следующем входе."),
+    },
+    "protocol": {
+        "uz": ("Ko'rib chiqish kerak: imzo yoki nazorat summasida MD5 / SHA-1",
+               "Bu zaiflikning o'zi emas: agar algoritmni tashqi protokol belgilasa (masalan, to'lov provayderining webhook imzosi), uni o'zgartirib bo'lmaydi.",
+               "Avval provayder spetsifikatsiyasini tekshiring. U shu algoritmni talab qilsa, faqat shu joyda qoldiring va MessageDigest.isEqual bilan solishtiring; "
+               "faqat o'z tomoningizni almashtirmang. Ikkala tomon sizniki bo'lsa, HMAC-SHA-256 ishlating."),
+        "ru": ("Требует проверки: MD5 / SHA-1 в подписи или контрольной сумме",
+               "Само по себе это не уязвимость: если алгоритм задан внешним протоколом (например, подпись webhook платёжного провайдера), заменить его нельзя.",
+               "Сначала проверьте спецификацию провайдера. Если она требует этот алгоритм, оставьте его только в этом месте и сравнивайте через MessageDigest.isEqual; "
+               "не меняйте только свою сторону. Если обе стороны ваши — используйте HMAC-SHA-256."),
+    },
+}
+
 FIX_VARIANTS = {
     ("ARX-CSP", "xss_header"): {
         "uz": "Sarlavhani olib tashlang (zamonaviy brauzerlar uni e'tiborsiz qoldiradi) — ekranlash va haqiqiy CSP yetarli.",
@@ -518,6 +595,9 @@ def localize(f: Finding, lang: str) -> tuple[str, str, str]:
         fix = t["fix"].format(**d) if d.get("target") else t["nofix"].format(**d)
         return t["title"], t["msg"].format(**d), fix
     title, why, fix = RULES.get(f.rule_id, {}).get(lang, (f.title, f.message, f.fix))
+    hotspot = WEAKHASH_CONTEXT.get(f.data.get("context", "")) if f.rule_id == "ARX-WEAKHASH" else None
+    if hotspot and lang in hotspot:
+        title, why, fix = hotspot[lang]
     fix = fix or f.fix  # AI-review fixes are generic English templates when no translation exists
     variant = FIX_VARIANTS.get((f.rule_id, f.data.get("fix_key", "")), {}).get(lang)
     if variant:

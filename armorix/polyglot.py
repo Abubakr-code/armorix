@@ -195,6 +195,34 @@ class PolyAnalyzer(Analyzer):
                        for c in node.named_children) and not any(c.type == "variable_name" for c in walk(node))
         return False
 
+    def is_constant(self, node, seen: frozenset = frozenset()) -> bool:
+        """True when the expression can only ever evaluate to text fixed in the source.
+
+        A literal, parentheses, `a + b` of constants, or a variable whose *every* assignment is one. A
+        variable that is a parameter, is tainted, is built in a loop, or gets a non-constant value in any
+        branch is not constant — so `"…" + owned + "…"` stops being dynamic only when `owned` is provably fixed."""
+        if node is None or node.id in seen:
+            return False
+        seen = seen | {node.id}
+        if self.is_literal(node):
+            return True
+        t = node.type
+        if t == "parenthesized_expression":
+            return bool(node.named_children) and self.is_constant(node.named_children[0], seen)
+        if t == "binary_expression":
+            return self._operator(node) in {".", "+"} and all(
+                self.is_constant(node.child_by_field_name(k), seen) for k in ("left", "right"))
+        if t in self.name_types:
+            name = text(node)
+            for sid in self.scopes(node):
+                key = (sid, name)
+                defs = getattr(self, "_defs", {}).get(key)
+                if key in self.tainted:
+                    return False
+                if defs is not None:
+                    return bool(defs) and all(plain and self.is_constant(value, seen) for _, _, value, plain in defs)
+        return False
+
     def _operator(self, node) -> str:
         op = node.child_by_field_name("operator")
         if op is not None:
@@ -215,6 +243,8 @@ class PolyAnalyzer(Analyzer):
             op = self._operator(node)
             left, right = node.child_by_field_name("left"), node.child_by_field_name("right")
             if op in {".", "+"}:
+                if self.is_constant(node):
+                    return False  # fixed text assembled from fixed text is not "dynamic"
                 return any(self._stringy(side) for side in (left, right)) and not (self.is_literal(left) and self.is_literal(right))
         if t in CALLS:
             obj, name, args = call_parts(node)
@@ -554,8 +584,14 @@ def _schema_only(taint, arg: Node) -> bool:
     return bool(parts) and not values
 
 
-def _guarded(node: Node, rule: str, types: set[str]) -> bool:
-    """A validation call in the enclosing function (or the whole script for top-level PHP code)."""
+NAME_NODES = {"identifier", "variable_name", "name", "field_identifier"}
+
+
+def _guarded(node: Node, rule: str, types: set[str], arg: Node | None = None) -> bool:
+    """A validation call in the enclosing function (or the whole script for top-level PHP code).
+
+    With `arg`, the check has to be on a line that names a variable the sink uses: a `startsWith(` about
+    one value says nothing about another one in the same function."""
     guard = GUARDS.get(rule)
     if guard is None:
         return False
@@ -564,7 +600,15 @@ def _guarded(node: Node, rule: str, types: set[str]) -> bool:
         if cur.parent is None:
             break
         cur = cur.parent
-    return bool(guard.search(text(cur))) if cur is not None else False
+    if cur is None:
+        return False
+    body = text(cur)
+    names = {text(n) for n in walk(arg) if n.type in NAME_NODES} if arg is not None else set()
+    names -= {"this", "self", "$this"}
+    if not names:
+        return bool(guard.search(body))
+    return any(guard.search(line) and any(re.search(rf"(?<![\w$]){re.escape(n.lstrip('$'))}(?!\w)", line) for n in names)
+               for line in body.splitlines())
 
 
 # A database row is only *second-hand* input: it is a real source for stored XSS, and a guess
@@ -638,7 +682,7 @@ def check(src: SourceFile, taint: PolyAnalyzer, disabled: frozenset[str] = froze
                 if taint.is_literal(arg) or _sanitized(sink.rule, arg) or (arg.type in taint.name_types and SANITIZERS.get(sink.rule)
                                                                              and SANITIZERS[sink.rule].search(taint.string_value(arg))):
                     continue
-                if _guarded(call, sink.rule, taint.function_types):
+                if _guarded(call, sink.rule, taint.function_types, arg):
                     continue
                 via = taint.tainted_by(arg)
                 if via and _second_hand(taint, via) and not (sink.rule == "ARX-XSS" and _same_function(src, taint, call, via)):
@@ -698,7 +742,7 @@ def _special_call(src, taint, call, obj, name, args) -> Finding | None:
         opt = text(args[1])
         if opt == "CURLOPT_URL":
             via = taint.tainted_by(args[2])
-            if via and not _guarded(call, "ARX-SSRF", taint.function_types):
+            if via and not _guarded(call, "ARX-SSRF", taint.function_types, args[2]):
                 return _report(src, taint, call, "ARX-SSRF", name, via)
         if opt in {"CURLOPT_SSL_VERIFYPEER", "CURLOPT_SSL_VERIFYHOST"} and text(args[2]).lower() in {"false", "0"}:
             return finding(RULES["ARX-TLS"], src, call, Severity.MEDIUM, f"`{opt}` is turned off — any certificate is accepted.",
@@ -707,8 +751,7 @@ def _special_call(src, taint, call, obj, name, args) -> Finding | None:
         return finding(RULES["ARX-WEAKHASH"], src, call, Severity.MEDIUM, f"`{name}()` is used for a password or token — cracked in seconds.",
                        "Use password_hash($password, PASSWORD_DEFAULT) / password_verify(); random_bytes() for tokens.")
     if fam == "java" and name == "getInstance" and obj == "MessageDigest" and args and re.match(r'^"(MD5|MD2|SHA-?1)"$', text(args[0]), re.IGNORECASE):
-        return finding(RULES["ARX-WEAKHASH"], src, call, Severity.LOW, f"MessageDigest {text(args[0])} — collisions are practical.",
-                       "Use SHA-256+ for integrity and BCrypt / Argon2 (Spring Security PasswordEncoder) for passwords.")
+        return _java_digest(src, call, text(args[0]))
     if fam == "go" and obj in {"md5", "sha1"} and name in {"New", "Sum"}:
         return finding(RULES["ARX-WEAKHASH"], src, call, Severity.LOW, f"{obj}.{name} — collisions are practical.",
                        "Use sha256 for integrity and bcrypt / argon2 for passwords.")
@@ -726,6 +769,51 @@ def _special_call(src, taint, call, obj, name, args) -> Finding | None:
         return finding(RULES["ARX-TLS"], src, call, Severity.MEDIUM, "The hostname verifier accepts every host.",
                        "Keep the default hostname verification.")
     return None
+
+
+PASSWORD_CONTEXT = re.compile(r"(?i)pass(?:word|wd)|\bpwd\b|credential|bcrypt|hashPass|\blogin\b")
+# An external protocol that *specifies* the digest (payment webhooks, legacy signed callbacks): the
+# receiving side cannot pick another algorithm on its own.
+PROTOCOL_CONTEXT = re.compile(r"(?i)signature|\bsign(?:ed|ing)?\b|webhook|callback|hmac|checksum|\betag\b|fingerprint|merchant")
+
+
+def _java_digest(src: SourceFile, call: Node, algo: str) -> Finding:
+    """MD5 / SHA-1 in Java: say what it is used for before saying what to replace it with.
+
+    The digest name alone proves a weak algorithm is present, not a vulnerability: a password hash is a real
+    weakness, while a signature that a provider's protocol fixes to MD5 is a hotspot to review."""
+    method = call.parent
+    while method is not None and method.type not in {"method_declaration", "constructor_declaration", "lambda_expression"}:
+        method = method.parent
+    head = ""
+    if method is not None:
+        body = method.child_by_field_name("body")
+        head = text(method)[: (body.start_byte - method.start_byte) if body is not None else 200]  # name + parameters
+    stmt = call
+    while stmt.parent is not None and stmt.type not in {"local_variable_declaration", "return_statement", "expression_statement"}:
+        stmt = stmt.parent
+    around = f"{head} {text(stmt)}"
+    rule = RULES["ARX-WEAKHASH"]
+    if PASSWORD_CONTEXT.search(around):
+        f = finding(rule, src, call, Severity.MEDIUM,
+                    f"MessageDigest {algo} hashes a password — fast, unsalted digests are cracked at billions per second.",
+                    "Store passwords with BCrypt / Argon2 (Spring Security PasswordEncoder) and rehash existing users at their next login.")
+        context = "password"
+    elif PROTOCOL_CONTEXT.search(around):
+        f = finding(rule, src, call, Severity.LOW,
+                    f"Security hotspot: MessageDigest {algo} is used for a signature or checksum. It is only a weakness "
+                    "if you choose the algorithm — an external protocol may require it.",
+                    "Check the provider's specification first. If it mandates this digest, keep it for that call site only and compare "
+                    "values with MessageDigest.isEqual; do not switch your side alone, the other party would reject every request. "
+                    "If you control both sides, use HMAC-SHA-256.")
+        context = "protocol"
+    else:
+        f = finding(rule, src, call, Severity.LOW, f"MessageDigest {algo} — collisions are practical. Review what the digest protects.",
+                    "Use SHA-256+ for integrity and BCrypt / Argon2 (Spring Security PasswordEncoder) for passwords.")
+        context = "unknown"
+    f.data["context"] = context
+    f.confidence = "high" if context == "password" else "review"
+    return f
 
 
 def _sensitive_target(call: Node, taint) -> bool:
@@ -766,7 +854,7 @@ def _special_node(src, taint, node) -> Finding | None:
         if value is None or taint.is_literal(value):
             return None
         via = taint.tainted_by(value)
-        if via and not _guarded(node, "ARX-LFI", taint.function_types):
+        if via and not _guarded(node, "ARX-LFI", taint.function_types, value):
             return _report(src, taint, node, "ARX-LFI", t.split("_")[0], via)
     if fam == "php" and t == "shell_command_expression":
         via = taint.tainted_by(node)

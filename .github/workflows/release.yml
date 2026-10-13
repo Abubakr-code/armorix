@@ -26,6 +26,8 @@ jobs:
             desktop: --mac dmg
           - os: ubuntu-22.04-arm    # CLI only (Raspberry Pi 4/5, ARM servers)
             desktop: ""
+          - os: macos-15-intel      # CLI only — install.sh offers Intel Macs, so the archive it downloads has to exist
+            desktop: ""
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

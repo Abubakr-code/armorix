@@ -27,7 +27,7 @@ from .report_ci import to_github, to_markdown
 from .report_html import to_html
 from .report_sarif import to_sarif
 from .rules import ALL_RULES
-from .scanner import ScanResult, scan, severity_counts
+from .scanner import CONFIDENCE_RANK, ScanResult, apply_min_confidence, coverage, not_run, scan, severity_counts
 
 COLORS = {Severity.CRITICAL: "bold white on red", Severity.HIGH: "bold red", Severity.MEDIUM: "bold yellow", Severity.LOW: "cyan"}
 ACCENT = "#7088ff"
@@ -63,7 +63,8 @@ def render(result: ScanResult, console: Console, lang: str = "en") -> None:
     for f in code:
         title, message, fix = i18n.localize(f, lang)
         sev = Text(f" {i18n.severity(lang, f.severity)} ", style=COLORS[f.severity])
-        console.print(Text.assemble(sev, "  ", (f.cwe, f"bold {ACCENT}"), "  ", (title, "bold"), "  ", (f"{f.file}:{f.line}", "dim underline")))
+        tag = (" ", (f"[{t('review')}]", "yellow")) if f.confidence == "review" else ("",)
+        console.print(Text.assemble(sev, "  ", (f.cwe, f"bold {ACCENT}"), "  ", (title, "bold"), *tag, "  ", (f"{f.file}:{f.line}", "dim underline")))
         console.print(f"   {escape(message)}")
         if f.trace:
             colors = {"source": "green", "flows": "dim", "sink": "red"}
@@ -106,6 +107,12 @@ def render(result: ScanResult, console: Console, lang: str = "en") -> None:
     console.print(f"{verdict} · {t('time', ms=f'{result.seconds * 1000:.0f}')} · [green]{t('zero')}[/]")
     for err in result.errors:
         console.print(f"[yellow]skipped[/] {escape(err)}")
+    gaps = [g for g in not_run(result) if g[0] != "dependencies"]  # dependencies already has its own line above
+    if gaps:
+        console.print(f"[dim]{t('not_checked')}: " + "; ".join(escape(i18n.stage_line(lang, *g)) for g in gaps) + "[/]")
+    cf = result.stages.get("confidence_filter")
+    if cf and cf["hidden"]:
+        console.print(f"[dim]{t('conf_hidden', n=cf['hidden'], m=cf['minimum'])}[/]")
 
 
 def _finding_json(f, lang: str) -> dict:
@@ -118,18 +125,28 @@ def _finding_json(f, lang: str) -> dict:
     return data
 
 
+JSON_SCHEMA_VERSION = 2
+
+
 def to_json(result: ScanResult, lang: str = "en") -> str:
     return json.dumps(
         {
             "tool": "armorix",
             "version": __version__,
+            "schema_version": JSON_SCHEMA_VERSION,
             "target": str(result.root),
             "files": result.files,
             "lines": result.lines,
             "seconds": round(result.seconds, 3),
+            "languages": dict(result.languages),
             "counts": severity_counts(result.findings),
             "suppressed": result.suppressed,
             "baselined": result.baselined,
+            "cached": result.cached,
+            "config": result.config,
+            "dependencies": {"checked": result.dependencies, "database_available": result.db_available},
+            "errors": list(result.errors),
+            "coverage": coverage(result),
             "findings": [_finding_json(f, lang) for f in result.findings],
         },
         indent=2,
@@ -160,6 +177,8 @@ def main(argv: list[str] | None = None) -> int:
     p_scan.add_argument("--lang", choices=list(i18n.LANGS), help="output language (default: $ARMORIX_LANG / $LANG / en)")
     p_scan.add_argument("--fail-on", default="high", choices=[s.name.lower() for s in Severity] + ["none"],
                         help="exit with code 1 when a finding of this severity or higher exists (default: high)")
+    p_scan.add_argument("--min-confidence", default="review", choices=list(CONFIDENCE_RANK),
+                        help="hide findings with weaker evidence: review (show all, default) < medium < high (only traced flows and proven weaknesses)")
     p_scan.add_argument("--baseline", metavar="FILE", help="hide findings recorded in this baseline (report only new ones)")
     p_scan.add_argument("--write-baseline", metavar="FILE", help="record the current findings as the baseline and exit 0")
     p_scan.add_argument("--exclude", action="append", default=[], metavar="PATTERN", help="skip paths (gitignore style); repeatable")
@@ -275,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
             n = write_baseline(Path(ns.write_baseline), result.findings)
             print(i18n.ui(i18n.detect(ns.lang), "baseline_written", n=n, path=ns.write_baseline), file=sys.stderr)
             return 0
+    if ns.min_confidence != "review":
+        apply_min_confidence(result, ns.min_confidence)
     if ns.format in {"json", "sarif", "html", "markdown", "github"}:
         lang = i18n.detect(ns.lang)
         payload = {"html": to_html, "json": to_json, "markdown": to_markdown, "github": to_github}.get(ns.format, lambda r, _l: to_sarif(r))(result, lang)

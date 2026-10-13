@@ -8,7 +8,7 @@ from . import __version__
 from .finding import Severity
 from .deps.check import DependencyRule
 from .rules import ALL_RULES
-from .scanner import ScanResult
+from .scanner import ScanResult, coverage, not_run
 
 LEVEL = {Severity.CRITICAL: "error", Severity.HIGH: "error", Severity.MEDIUM: "warning", Severity.LOW: "note"}
 # GitHub maps this 0–10 score to its own critical/high/medium/low badges.
@@ -54,7 +54,7 @@ def to_sarif(result: ScanResult) -> str:
             "level": LEVEL[f.severity],
             "message": {"text": f"{f.message} Fix: {f.fix}"},
             "locations": [_location(f.file, f.line, f.column, f.snippet)],
-            "properties": {"security-severity": SCORE[f.severity], "severity": f.severity.name.lower()},
+            "properties": {"security-severity": SCORE[f.severity], "severity": f.severity.name.lower(), "confidence": f.confidence},
         }
         if f.trace:
             item["codeFlows"] = [{"threadFlows": [{"locations": [
@@ -65,11 +65,17 @@ def to_sarif(result: ScanResult) -> str:
     for r in rules:
         seen = [f.severity for f in result.findings if f.rule_id == r["id"]]
         r["properties"]["security-severity"] = SCORE[max(seen)] if seen else "5.0"
+    # SARIF's own place for "this did not run in full": notifications on the invocation.
+    notes = [{"level": "warning" if status == "skipped" else "error", "message": {"text": f"{stage}: {status}" + (f" — {why}" if why else "")},
+              "descriptor": {"id": f"armorix/{stage}"}} for stage, status, why in not_run(result)]
+    notes += [{"level": "warning", "message": {"text": err}} for err in result.errors]
     doc = {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
         "runs": [{
             "tool": {"driver": {"name": "Armorix", "version": __version__, "informationUri": "https://armorix.security", "rules": rules}},
+            "invocations": [{"executionSuccessful": not result.errors, "toolExecutionNotifications": notes,
+                             "properties": {"coverage": coverage(result)}}],
             "results": results,
         }],
     }

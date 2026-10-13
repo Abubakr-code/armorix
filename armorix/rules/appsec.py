@@ -109,6 +109,175 @@ class RegexInjection(CallSinkRule):
            "py": "Escape the input with re.escape() or compare as plain text."}
 
 
+class _Atom:
+    """One element of a regular expression: what it is, how often it may repeat, and whether it can match nothing."""
+
+    __slots__ = ("min", "unbounded", "zero_width", "span", "branches")
+
+    def __init__(self, lo=1, unbounded=False, zero_width=False, span=(0, 0), branches=None):
+        self.min, self.unbounded, self.zero_width, self.span, self.branches = lo, unbounded, zero_width, span, branches
+
+
+def _quantifier(p: str, i: int):
+    """(min, unbounded, possessive, next index) for the quantifier at p[i], or None."""
+    if i >= len(p):
+        return None
+    c = p[i]
+    if c in "*+?":
+        lo, unb, j = (0 if c in "*?" else 1), c in "*+", i + 1
+    elif c == "{":
+        m = re.match(r"\{(\d*)(,?)(\d*)\}", p[i:])
+        if not m or not (m.group(1) or m.group(3)):
+            return None
+        lo = int(m.group(1) or 0)
+        unb = bool(m.group(2)) and not m.group(3)
+        j = i + m.end()
+    else:
+        return None
+    possessive = j < len(p) and p[j] == "+"  # a*+ never gives characters back: no backtracking
+    if j < len(p) and p[j] in "?+":
+        j += 1
+    return lo, unb, possessive, j
+
+
+def _parse_regex(p: str, i: int = 0, found: list | None = None):
+    """Parse enough of a regex to see its groups: returns (branches, next index); `found` collects
+    groups that are repeated without limit while their body can already match the same text many ways."""
+    found = found if found is not None else []
+    branches, items = [], []
+    while i < len(p):
+        c = p[i]
+        if c == ")":
+            break
+        if c == "|":
+            branches.append(items)
+            items, i = [], i + 1
+            continue
+        start = i
+        if c == "(":
+            lookaround = p.startswith(("(?=", "(?!", "(?<=", "(?<!"), i)
+            j = i + 1
+            if p.startswith("(?:", i):
+                j = i + 3
+            elif p.startswith("(?", i) and not lookaround:
+                m = re.match(r"\(\?(?:P?<\w+>|'\w+')", p[i:])
+                j = i + (m.end() if m else 2)
+            elif lookaround:
+                j = i + (4 if p.startswith(("(?<=", "(?<!"), i) else 3)
+            inner, i = _parse_regex(p, j, found)
+            i += 1  # the closing parenthesis
+            atom = _Atom(1, False, lookaround, (start, i), inner)
+        elif c == "[":
+            i += 1
+            if i < len(p) and p[i] == "^":
+                i += 1
+            if i < len(p) and p[i] == "]":
+                i += 1
+            while i < len(p) and p[i] != "]":
+                i += 2 if p[i] == "\\" else 1
+            i += 1
+            atom = _Atom(span=(start, i))
+        elif c == "\\":
+            i += 2
+            atom = _Atom(span=(start, i))
+        else:
+            i += 1
+            atom = _Atom(zero_width=c in "^$", span=(start, i))
+        q = _quantifier(p, i)
+        if q:
+            lo, unb, possessive, i = q
+            atom.min = lo
+            atom.unbounded = unb and not possessive
+            atom.span = (start, i)
+        elif atom.branches is not None and len(atom.branches) == 1:
+            # `(a+)` with no quantifier of its own still repeats `a` without limit inside an enclosing repeat
+            atom.unbounded = any(a.unbounded for a in atom.branches[0])
+        if atom.branches is not None and not atom.zero_width:
+            body_empty = all(all(a.zero_width or a.min == 0 for a in b) for b in atom.branches)
+            atom.min = 0 if (body_empty or atom.min == 0) else 1
+            if q and atom.unbounded and _ambiguous(atom.branches, p):  # only a group that is itself repeated
+                found.append(atom.span)
+        items.append(atom)
+    branches.append(items)
+    return branches, i
+
+
+def _ambiguous(branches, p: str) -> bool:
+    """A repeated group whose body can split the same input in several ways:
+    one element repeats on its own and everything else may be empty — `(a+)+`, `([0-9]+)+`, `(\\w*\\s*)*` —
+    or two alternatives start the same — `(a|aa)+`."""
+    for items in branches:
+        real = [a for a in items if not a.zero_width]
+        if any(a.unbounded for a in real) and all(a.unbounded or a.min == 0 for a in real):
+            return True
+    if len(branches) > 1:
+        words = [tuple(p[a.span[0]:a.span[1]] for a in b) for b in branches]
+        for k, x in enumerate(words):
+            for y in words[k + 1:]:
+                short, long_ = (x, y) if len(x) <= len(y) else (y, x)
+                if short and long_[:len(short)] == short:  # identical, or one is the start of the other
+                    return True
+    return False
+
+
+def catastrophic_pattern(pattern: str) -> str | None:
+    """The offending sub-pattern of a regex that backtracks exponentially, or None."""
+    found: list = []
+    try:
+        _parse_regex(pattern, 0, found)
+    except (IndexError, RecursionError):
+        return None
+    if not found:
+        return None
+    start, end = found[-1]  # the outermost repeated group is reported last
+    return pattern[start:end]
+
+
+class CatastrophicRegex(Rule):
+    id = "ARX-REDOS"
+    cwe = "CWE-1333"
+    title = "Regular expression with catastrophic backtracking (ReDoS)"
+    description = "A fixed regular expression repeats a group that can match the same text in many ways, so a short crafted string hangs the process."
+    families = ("js", "py")
+    FIX = {"js": "Remove the nested quantifier (`([0-9]+)+` → `[0-9]+`), anchor the pattern, or match with a linear-time engine (RE2).",
+           "py": "Remove the nested quantifier (`([0-9]+)+` → `[0-9]+`), anchor the pattern, or use the `re2` package."}
+    PY_FUNCS = {"compile", "match", "search", "fullmatch", "findall", "finditer", "sub", "subn", "split"}
+    STRING = re.compile(r"""^[rRbBuUfF]*(\"\"\"|'''|"|')(.*)\1$""", re.S)
+
+    def _literal(self, node, family):
+        if node is None or node.type not in {"string", "template_string"}:
+            return None
+        m = self.STRING.match(text(node)) if family == "py" else re.match(r"""^(["'`])(.*)\1$""", text(node), re.S)
+        if not m:
+            return None
+        body = m.group(2)
+        # a JS or non-raw Python string halves its backslashes: "\\d+" is the pattern \d+
+        return body.replace("\\\\", "\\") if not (family == "py" and text(node)[0] in "rR") else body
+
+    def check(self, src, taint):
+        out = []
+        for node in src.nodes:
+            pattern = None
+            if src.family == "js" and node.type == "regex":
+                pattern = text(node.child_by_field_name("pattern"))
+            elif node.type in {"call", "call_expression", "new_expression"}:
+                obj, name = callee(node)
+                a = args(node)
+                if src.family == "js" and name == "RegExp" and a:
+                    pattern = self._literal(a[0], "js")
+                elif src.family == "py" and obj == "re" and name in self.PY_FUNCS and a:
+                    pattern = self._literal(a[0], "py")
+            if not pattern:
+                continue
+            bad = catastrophic_pattern(pattern)
+            if bad:
+                out.append(finding(self, src, node, Severity.MEDIUM,
+                                   f"The pattern `{bad}` repeats a group that can match the same text in many ways — "
+                                   "a short crafted string (for example many digits followed by one other character) "
+                                   "makes the match take exponential time and blocks the process.", self.FIX[src.family]))
+        return out
+
+
 class InsecureCookie(Rule):
     id = "ARX-COOKIE"
     cwe = "CWE-1004"

@@ -6,7 +6,7 @@ import re
 
 from ..finding import Severity
 from ..parsing import text, walk
-from .base import CallSinkRule, Rule, args, callee, calls, finding, kwarg
+from .base import CALLS, CallSinkRule, allowlist_guard, Rule, args, callee, calls, finding, kwarg, sanitizer_call
 
 XSS_SANITIZERS = ("DOMPurify", "sanitize", "escape", "xss(", "encode(", "bleach")
 # `this.sanitizer.bypassSecurityTrustHtml(x)` tells Angular to trust x — the name contains
@@ -104,8 +104,11 @@ class ReflectedXss(CallSinkRule):
                     value = a[0]
             elif node.type == "jsx_attribute" and text(node.named_children[0]) == "dangerouslySetInnerHTML":
                 value = node
-            if value is None or taint.is_literal(value) or any(s in text(value) for s in XSS_SANITIZERS):
+            if value is None or taint.is_literal(value):
                 continue
+            html = self._html_value(value) if node.type == "jsx_attribute" else value
+            if self._safe_html(src, taint, html):
+                continue  # a real sanitizer call, a constant, or state that only ever receives those
             if value.type == "call_expression" and all(taint.is_literal(a) for a in args(value)):
                 continue  # __('Hide'), t('label') — translations of fixed strings
             if node.type == "jsx_attribute" and not any(n.type in {"identifier", "member_expression", "template_substitution"} for n in walk(value)):
@@ -127,6 +130,110 @@ class ReflectedXss(CallSinkRule):
                                    "A non-constant value is inserted as raw HTML — safe only if it can never contain user data.", here))
         return out
 
+    # ── is this HTML value provably sanitized? ──────────────────
+    @staticmethod
+    def _html_value(attr):
+        """`dangerouslySetInnerHTML={{__html: EXPR}}` → EXPR."""
+        for n in walk(attr):
+            if n.type == "pair" and text(n.child_by_field_name("key")).strip("'\"") == "__html":
+                return n.child_by_field_name("value")
+        return None
+
+    WRAPPERS = {"parenthesized_expression", "await_expression", "as_expression", "non_null_expression", "satisfies_expression"}
+
+    def _safe_html(self, src, taint, node, seen=frozenset()) -> bool:
+        """True when `node` can only hold sanitizer output or a constant.
+
+        Sanitization is *proved*, not guessed from a name: the value is the return of a sanitizer call, or
+        a variable / React state field whose every assignment is one. A single raw write breaks the proof."""
+        if node is None or node.id in seen:
+            return False
+        seen = seen | {node.id}
+        t = node.type
+        if taint.is_literal(node) or t in {"number", "true", "false", "null", "undefined"}:
+            return True
+        if t in CALLS:
+            hit = sanitizer_call(node, XSS_SANITIZERS, src)
+            return hit is not None and hit.id == node.id
+        if t in self.WRAPPERS:
+            return bool(node.named_children) and self._safe_html(src, taint, node.named_children[0], seen)
+        if t == "ternary_expression":  # the condition only picks a branch
+            return all(self._safe_html(src, taint, node.child_by_field_name(k), seen) for k in ("consequence", "alternative"))
+        if t == "binary_expression":
+            op = text(node.child_by_field_name("operator"))
+            left, right = node.child_by_field_name("left"), node.child_by_field_name("right")
+            if op == "&&":
+                return self._safe_html(src, taint, right, seen)
+            return op in {"+", "||", "??"} and all(self._safe_html(src, taint, x, seen) for x in (left, right))
+        if t == "template_string":
+            subs = [c for c in node.children if c.type == "template_substitution"]
+            return all(self._safe_html(src, taint, c.named_children[0], seen) for c in subs if c.named_children)
+        if t == "member_expression":
+            obj, prop = node.child_by_field_name("object"), node.child_by_field_name("property")
+            if obj is not None and obj.type == "identifier" and prop is not None:
+                return self._state_safe(src, taint, text(obj), text(prop), seen)
+            return False
+        if t == "identifier":
+            if self._state_safe(src, taint, text(node), None, seen):
+                return True
+            defs = self._defs_of(taint, text(node), node)
+            return bool(defs) and all(plain and self._safe_html(src, taint, value, seen) for _, _, value, plain in defs)
+        return False
+
+    @staticmethod
+    def _defs_of(taint, name, node):
+        for sid in taint.scopes(node):
+            defs = getattr(taint, "_defs", {}).get((sid, name))
+            if defs:
+                return defs
+        return None
+
+    def _state_safe(self, src, taint, name, field, seen) -> bool:
+        """`const [clean, setClean] = useState(init)`: safe when `init` and every `setClean(...)` are.
+
+        With `field`, the state is an object and only that field is read (`clean.html`)."""
+        setter = init = None
+        for n in src.nodes:
+            if n.type != "variable_declarator":
+                continue
+            pat, val = n.child_by_field_name("name"), n.child_by_field_name("value")
+            if pat is None or pat.type != "array_pattern" or val is None or val.type not in CALLS:
+                continue
+            names = [c for c in pat.named_children if c.type == "identifier"]
+            if len(names) == 2 and text(names[0]) == name and callee(val)[1] == "useState":
+                setter, init = text(names[1]), val
+                break
+        if setter is None:
+            return False
+
+        def holds(arg) -> bool:
+            if field is None:
+                return self._safe_html(src, taint, arg, seen)
+            if arg is None or arg.type != "object":
+                return False
+            pairs = [c for c in arg.named_children if c.type == "pair" and text(c.child_by_field_name("key")).strip("'\"") == field]
+            return len(pairs) == 1 and not any(c.type == "spread_element" for c in arg.named_children) \
+                and self._safe_html(src, taint, pairs[0].child_by_field_name("value"), seen)
+
+        initial = args(init)
+        if not initial or not holds(initial[0]):
+            return False
+        writes = 0
+        for n in src.nodes:
+            if n.type != "identifier" or text(n) != setter:
+                continue
+            parent = n.parent
+            if parent is not None and parent.type == "array_pattern":
+                continue  # the declaration itself: const [state, setState] = …
+            if parent is None or parent.type not in CALLS or parent.child_by_field_name("function") is None \
+                    or parent.child_by_field_name("function").id != n.id:
+                return False  # the setter escapes (passed as a callback): writes cannot be followed
+            a = args(parent)
+            if not a or not holds(a[0]):
+                return False
+            writes += 1
+        return writes > 0
+
     def _py_return(self, src, taint):
         """Flask/Django view returning an f-string or concatenation of HTML with user input."""
         out = []
@@ -136,7 +243,7 @@ class ReflectedXss(CallSinkRule):
             value = node.named_children[0]
             if not taint.is_dynamic_string(value) or "<" not in taint.string_value(value):
                 continue
-            if any(s in text(value) for s in XSS_SANITIZERS):
+            if sanitizer_call(value, XSS_SANITIZERS, src) is not None:
                 continue
             via = taint.tainted_by(value)
             if via:
@@ -218,6 +325,9 @@ class PathTraversal(CallSinkRule):
     def skip(self, src, call, arg):
         return kwarg(call, "root") is not None  # res.sendFile(name, { root }) is contained
 
+    def allowlisted(self, src, taint, call, arg):
+        return allowlist_guard(src, taint, call, arg, strict=True)
+
 
 class Ssrf(CallSinkRule):
     id = "ARX-SSRF"
@@ -236,6 +346,9 @@ class Ssrf(CallSinkRule):
     msg_tainted = "The server makes a request to a URL built from `{src}` — an attacker can reach internal services or cloud metadata."
     fix = {"js": "Allow-list hosts (new URL(value).hostname) and block private IP ranges before fetching.",
            "py": "Allow-list hosts (urllib.parse.urlparse(value).hostname) and block private IP ranges before requesting."}
+
+    def allowlisted(self, src, taint, call, arg):
+        return allowlist_guard(src, taint, call, arg, strict=False)  # a fixed list of whole URLs is the safest allow-list
 
 
 class OpenRedirect(CallSinkRule):
@@ -274,6 +387,9 @@ class OpenRedirect(CallSinkRule):
 
     def skip(self, src, call, arg):
         return bool(self.SAME_ORIGIN.match(self._literal_prefix(arg)))
+
+    def allowlisted(self, src, taint, call, arg):
+        return allowlist_guard(src, taint, call, arg, strict=False)
 
     @staticmethod
     def _literal_prefix(node) -> str:

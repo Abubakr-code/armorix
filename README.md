@@ -121,6 +121,7 @@ Findings appear as annotations on the pull request diff and as a table in the jo
 | ARX-MASS | CWE-915 | the whole request body saved into a model |
 | ARX-PROTO | CWE-1321 | deep merges / nested keys from input (prototype pollution) |
 | ARX-REGEX | CWE-1333 | regular expressions built from input (ReDoS) |
+| ARX-REDOS | CWE-1333 | fixed regular expressions that backtrack exponentially, e.g. `([0-9]+)+#` (ReDoS) |
 | ARX-SECRET | CWE-798 | AWS / GitHub / GitLab / Stripe / OpenAI / Anthropic / Telegram / Slack / Google / npm / PyPI keys, DB URLs with passwords, private keys, committed `.env` |
 | ARX-SIGNKEY | CWE-321 | JWT / session / Flask secret keys written in code |
 | ARX-JWT | CWE-347 | `alg: none`, signature verification disabled |

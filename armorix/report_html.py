@@ -8,11 +8,12 @@ from datetime import datetime
 
 from . import __version__, i18n
 from .finding import Severity
-from .scanner import ScanResult
+from .scanner import not_run, ScanResult
 
 FAMILY_NAMES = {"js": "JS/TS", "py": "Python", "c": "C/C++", "php": "PHP", "go": "Go", "java": "Java"}
 
 CSS = """
+.gaps{margin:0 0 16px;padding:10px 14px;border:1px solid #d9b44a;border-radius:8px;font-size:13px}.gaps .gap{margin:4px 0 0}.review{color:#b8860b;font-style:normal}
 :root{--paper:#f4f4f1;--card:#fff;--ink:#0d0d0f;--muted:#6f6f6a;--line:#dcdcd5;--accent:#2448ff;--code:#0d0d0f;--codeink:#e8e8e4;
 --crit:#ff3b5c;--high:#ff7a1a;--med:#e0a100;--low:#3b82f6;color-scheme:light}
 @media (prefers-color-scheme:dark){:root{--paper:#0b0c0f;--card:#16171c;--ink:#efefeb;--muted:#8e8f97;--line:#26272e;--accent:#6f86ff;--code:#0f1013;color-scheme:dark}}
@@ -71,10 +72,11 @@ def _code(f, lang: str = "en") -> str:
 
 def _card(f, lang: str) -> str:
     title, message, fix = i18n.localize(f, lang)
+    review = f' <em class="review">[{_e(i18n.ui(lang, "review"))}]</em>' if f.confidence == "review" else ""
     return f"""<article class="f" data-sev="{f.severity.name}">
   <div class="f-top"><span class="sev {f.severity.name}">{_e(i18n.severity(lang, f.severity))}</span>
   <a class="cwe" href="https://cwe.mitre.org/data/definitions/{_e(f.cwe.split('-')[1])}.html">{_e(f.cwe)}</a>
-  <span class="title">{_e(title)}</span><span class="loc">{_e(f.file)}:{f.line}</span></div>
+  <span class="title">{_e(title)}</span>{review}<span class="loc">{_e(f.file)}:{f.line}</span></div>
   <p class="msg">{_e(message)}</p>{_code(f, lang)}
   <div class="fix"><b>{_e(i18n.ui(lang, "fix").capitalize())}</b> — {_e(fix)}</div>
 </article>"""
@@ -94,6 +96,8 @@ def to_html(result: ScanResult, lang: str = "en") -> str:
         for s in sorted(Severity, reverse=True)
     )
     cards = "".join(_card(f, lang) for f in result.findings) or f'<div class="empty"><b>✓</b>{_e(t("none"))}</div>'
+    gaps = "".join(f'<p class="gap">⚠ {_e(i18n.stage_line(lang, *g))}</p>' for g in not_run(result))
+    gaps = f'<section class="gaps"><b>{_e(t("not_checked"))}</b>{gaps}</section>' if gaps else ""
     when = datetime.now().strftime("%Y-%m-%d %H:%M")
     return f"""<!doctype html><html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Armorix — {_e(result.root.name)}</title><style>{CSS}</style></head><body><div class="wrap">
@@ -103,6 +107,6 @@ def to_html(result: ScanResult, lang: str = "en") -> str:
 <span class="badge"><i></i>{_e(t("offline"))}</span></header>
 <section class="stats">{stats}</section>
 <div class="tools"><input id="q" type="search" placeholder="{_e(t("filter"))}" aria-label="{_e(t("filter"))}"></div>
-<main>{cards}</main>
+{gaps}<main>{cards}</main>
 <footer>{_e(t("footer", v=__version__))}</footer>
 </div><script>{JS}</script></body></html>"""

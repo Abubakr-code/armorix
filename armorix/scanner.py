@@ -56,6 +56,9 @@ class ScanResult:
     baselined: int = 0  # hidden because they are in the baseline
     cached: int = 0  # files answered from the cache
     config: str | None = None  # armorix.toml that was applied
+    # What each stage of the scan did: {"code": {"status": "completed"}, "dependencies": {"status": "skipped", "reason": …}}.
+    # A report that only lists findings cannot tell "checked, nothing found" from "never checked".
+    stages: dict = field(default_factory=dict)
 
 
 def _wanted(path: Path) -> bool:
@@ -348,7 +351,15 @@ def scan(target: str | Path, deps: bool = True, db: OsvDb | None = None, progres
             result.languages[data["family"]] += 1
         result.findings.extend(Finding.from_dict(f) for f in data["findings"])
 
-    if deps and "ARX-DEP" not in disabled and not stop():
+    result.stages["code"] = {"status": "cancelled" if stop() else "completed", "files": len(jobs),
+                             "failed": len(result.errors)}
+    if not deps:
+        result.stages["dependencies"] = {"status": "skipped", "reason": "disabled by the caller"}
+    elif "ARX-DEP" in disabled:
+        result.stages["dependencies"] = {"status": "skipped", "reason": "rule ARX-DEP is disabled"}
+    elif stop():
+        result.stages["dependencies"] = {"status": "skipped", "reason": "scan was cancelled"}
+    else:
         db = db or OsvDb()
         result.db_available = db.available
         if db.available:
@@ -358,6 +369,9 @@ def scan(target: str | Path, deps: bool = True, db: OsvDb | None = None, progres
                 report("deps", index, len(manifests), rel)
                 result.dependencies += len(parse(path, rel))
                 result.findings.extend(check_manifest(db, path, rel))
+            result.stages["dependencies"] = {"status": "completed", "manifests": len(manifests), "packages": result.dependencies}
+        else:
+            result.stages["dependencies"] = {"status": "skipped", "reason": "offline vulnerability database (OSV) is not installed"}
 
     result.findings = [f for f in result.findings if f.severity >= config.min_severity]
     assign_fingerprints(result.findings)
@@ -371,6 +385,43 @@ def scan(target: str | Path, deps: bool = True, db: OsvDb | None = None, progres
     result.findings.sort(key=lambda f: (-f.severity, f.file, f.line))
     result.seconds = time.perf_counter() - started
     return result
+
+
+CONFIDENCE_RANK = {"review": 0, "medium": 1, "high": 2}
+
+
+def coverage(result: ScanResult) -> dict[str, dict]:
+    """What was and was not checked — so `0 findings` is never mistaken for `everything was checked`.
+
+    Each stage is `completed`, `completed_with_errors`, `skipped` or `cancelled`, with the reason when it did
+    not run in full. Shared by every report format."""
+    stages = {k: dict(v) for k, v in result.stages.items()}
+    stages.setdefault("code", {"status": "completed"})
+    if result.errors and stages["code"]["status"] == "completed":
+        stages["code"]["status"] = "completed_with_errors"
+    if "dependencies" not in stages:
+        stages["dependencies"] = {"status": "completed"} if result.db_available else {
+            "status": "skipped", "reason": "offline vulnerability database (OSV) is not installed"}
+    # History and AI review run only through `scan --deep`, which records their outcome itself.
+    for name in ("history", "ai_review"):
+        stages.setdefault(name, {"status": "skipped", "reason": "not requested (use `armorix scan --deep`)"})
+    return stages
+
+
+def not_run(result: ScanResult) -> list[tuple[str, str, str]]:
+    """[(stage, status, reason)] for every stage that did not run in full."""
+    return [(name, s["status"], s.get("reason", "")) for name, s in coverage(result).items()
+            if s["status"] not in {"completed", "applied"}]
+
+
+def apply_min_confidence(result: ScanResult, minimum: str) -> int:
+    """Hide findings whose evidence is weaker than `minimum`; the count is recorded, never silent."""
+    floor = CONFIDENCE_RANK[minimum]
+    kept = [f for f in result.findings if CONFIDENCE_RANK.get(f.confidence, 1) >= floor]
+    hidden = len(result.findings) - len(kept)
+    result.findings = kept
+    result.stages["confidence_filter"] = {"status": "applied", "minimum": minimum, "hidden": hidden}
+    return hidden
 
 
 def severity_counts(findings: list[Finding]) -> dict[str, int]:

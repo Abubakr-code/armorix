@@ -188,3 +188,33 @@ jobs:
             fix.log
             report.md
             scan.json
+
+  # install.sh offers Intel Macs; the one-line install has to work there too (CLI only — the desktop app is Apple Silicon).
+  cli-macos-intel:
+    runs-on: macos-15-intel
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag || 'latest' }}
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: CLI install — curl … | sh
+        shell: bash
+        run: |
+          [ "$TAG" = latest ] || export ARMORIX_VERSION="$TAG"
+          curl -fsSL https://abubakr-code.github.io/install.sh | ARMORIX_NO_MODIFY_PATH=1 sh
+          echo "$HOME/.armorix/bin" >> "$GITHUB_PATH"
+      - name: Scan finds the planted vulnerabilities
+        shell: bash
+        run: |
+          uname -m
+          armorix --version
+          armorix scan examples/vuln-shop --format json --fail-on none > scan.json
+          python3 -c "
+          import json
+          d = json.load(open('scan.json', encoding='utf-8'))
+          rules = {f['rule_id'] for f in d['findings']}
+          missing = {'ARX-SQLI', 'ARX-CMDI', 'ARX-EVAL', 'ARX-XSS', 'ARX-C-BOF', 'ARX-C-UAF'} - rules
+          print(len(d['findings']), 'findings')
+          assert len(d['findings']) >= 15 and not missing, missing
+          "
+          armorix update --check

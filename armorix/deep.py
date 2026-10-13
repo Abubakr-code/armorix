@@ -247,8 +247,15 @@ def deep_scan(target, ai: LocalAI | None = None, progress=None, cancelled=None, 
     result = scan(target, progress=progress, cancelled=cancelled, config=config)
     root = result.root if result.root.is_dir() else result.root.parent
     result.findings += git_history_secrets(root, progress, cancelled)
+    result.stages["history"] = {"status": "completed"}
     has_auth, noauth = auth_overview(result)
     result.findings += noauth + idor_candidates(result)
+    if ai is None:
+        result.stages["ai_review"] = {"status": "skipped", "reason": "local AI engine is not available"}
+    elif cancelled and cancelled():
+        result.stages["ai_review"] = {"status": "skipped", "reason": "scan was cancelled"}
+    else:
+        result.stages["ai_review"] = {"status": "completed"}
     if ai is not None and not (cancelled and cancelled()):
         result.findings += [f for f in ai_review(ai, result, progress, cancelled)
                             # Without any auth system, per-handler "missing auth" only repeats ARX-NOAUTH.

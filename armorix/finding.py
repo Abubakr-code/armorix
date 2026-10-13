@@ -39,6 +39,9 @@ class Finding:
     trace: list[TraceStep] = field(default_factory=list)
     data: dict = field(default_factory=dict)  # structured details for localisation (source, package, …)
     fingerprint: str = ""  # line-independent id (baseline, history diff); set by the scanner
+    # How the evidence stands, apart from how bad it would be: "high" = a traced source → sink flow or a
+    # proven weakness, "medium" = a non-constant value reaches a sink, "review" = a hotspot a person must judge.
+    confidence: str = "medium"
 
     @property
     def key(self) -> tuple:

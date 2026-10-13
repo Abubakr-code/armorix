@@ -6,7 +6,7 @@ from collections import Counter
 
 from . import __version__, i18n
 from .finding import Severity
-from .scanner import ScanResult
+from .scanner import ScanResult, not_run
 
 LEVEL = {Severity.CRITICAL: "error", Severity.HIGH: "error", Severity.MEDIUM: "warning", Severity.LOW: "notice"}
 EMOJI = {Severity.CRITICAL: "🟥", Severity.HIGH: "🟧", Severity.MEDIUM: "🟨", Severity.LOW: "🟦"}
@@ -53,7 +53,8 @@ def to_markdown(result: ScanResult, lang: str = "en") -> str:
             out.append("|---|---|---|---|")
             for f in code[:100]:
                 title, message, _ = i18n.localize(f, lang)
-                out.append(f"| {EMOJI[f.severity]} | `{f.rule_id}` {f.cwe} | `{f.file}:{f.line}` | **{title}** — {message.replace('|', '\\|')} |")
+                review = f" _({t('review')})_" if f.confidence == "review" else ""
+                out.append(f"| {EMOJI[f.severity]} | `{f.rule_id}` {f.cwe} | `{f.file}:{f.line}` | **{title}**{review} — {message.replace('|', '\\|')} |")
             if len(code) > 100:
                 out.append(f"\n… +{len(code) - 100}")
         if deps:
@@ -73,5 +74,11 @@ def to_markdown(result: ScanResult, lang: str = "en") -> str:
         extra.append(f"{result.suppressed} armorix-ignore")
     if extra:
         out.append(f"\n<sub>Hidden: {', '.join(extra)}.</sub>")
+    gaps = not_run(result)
+    if gaps:
+        out.append(f"\n<sub>⚠️ {t('not_checked')}: " + "; ".join(i18n.stage_line(lang, *g) for g in gaps) + "</sub>")
+    cf = result.stages.get("confidence_filter")
+    if cf and cf["hidden"]:
+        out.append(f"\n<sub>{t('conf_hidden', n=cf['hidden'], m=cf['minimum'])}</sub>")
     out.append(f"\n<sub>{t('zero')} · {result.seconds:.1f}s</sub>")
     return "\n".join(out) + "\n"
