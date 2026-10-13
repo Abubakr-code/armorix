@@ -269,7 +269,8 @@ def test_json_reports_coverage_and_errors(tmp_path):
     cov = doc["coverage"]
     assert cov["code"]["status"] == "completed"
     assert cov["dependencies"]["status"] == "skipped" and cov["dependencies"]["reason"]
-    assert cov["history"]["status"] == cov["ai_review"]["status"] == "skipped"
+    # deep-only stages nobody asked for are information for a program, not a gap to warn a person about
+    assert cov["history"]["status"] == cov["ai_review"]["status"] == "not_requested"
 
 
 def test_json_never_implies_dependencies_were_checked_when_they_were_not(tmp_path):
@@ -378,12 +379,15 @@ def test_every_format_says_what_was_not_checked(tmp_path):
     from armorix.report_sarif import to_sarif
 
     result = scan(_project(tmp_path), deps=False)
-    assert "history: skipped" in to_markdown(result) and "needs review" in to_markdown(result)
+    md = to_markdown(result)
+    assert "dependencies: skipped" in md and "needs review" in md  # a real gap is shown
+    assert "history" not in md and "AI review" not in md            # an unrequested --deep stage is not a warning
     page = to_html(result)
     assert 'class="gaps"' in page and "needs review" in page
     run = json.loads(to_sarif(result))["runs"][0]
     ids = {n["descriptor"]["id"] for n in run["invocations"][0]["toolExecutionNotifications"] if "descriptor" in n}
-    assert {"armorix/history", "armorix/ai_review"} <= ids
+    assert "armorix/dependencies" in ids and not {"armorix/history", "armorix/ai_review"} & ids
+    assert run["invocations"][0]["properties"]["coverage"]["history"]["status"] == "not_requested"  # still machine-readable
     assert {r["properties"]["confidence"] for r in run["results"]} >= {"review"}
     assert "coverage" in run["invocations"][0]["properties"]
 

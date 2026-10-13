@@ -505,9 +505,12 @@ STAGES = {
     "en": {"code": "code", "dependencies": "dependencies", "history": "git history", "ai_review": "AI review"},
 }
 STATUS = {
-    "uz": {"skipped": "o'tkazib yuborildi", "cancelled": "bekor qilindi", "completed_with_errors": "xatolar bilan tugadi"},
-    "ru": {"skipped": "пропущено", "cancelled": "отменено", "completed_with_errors": "завершено с ошибками"},
-    "en": {"skipped": "skipped", "cancelled": "cancelled", "completed_with_errors": "completed with errors"},
+    "uz": {"skipped": "o'tkazib yuborildi", "cancelled": "bekor qilindi", "completed_with_errors": "xatolar bilan tugadi",
+           "not_requested": "so'ralmagan"},
+    "ru": {"skipped": "пропущено", "cancelled": "отменено", "completed_with_errors": "завершено с ошибками",
+           "not_requested": "не запрошено"},
+    "en": {"skipped": "skipped", "cancelled": "cancelled", "completed_with_errors": "completed with errors",
+           "not_requested": "not requested"},
 }
 
 

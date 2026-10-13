@@ -402,16 +402,18 @@ def coverage(result: ScanResult) -> dict[str, dict]:
     if "dependencies" not in stages:
         stages["dependencies"] = {"status": "completed"} if result.db_available else {
             "status": "skipped", "reason": "offline vulnerability database (OSV) is not installed"}
-    # History and AI review run only through `scan --deep`, which records their outcome itself.
+    # History and AI review run only through `scan --deep`, which records their outcome itself. When nobody asked for
+    # them they are *not requested* — information for a program reading the JSON, not a warning for the person reading
+    # the terminal: a gap is something that was supposed to run and did not.
     for name in ("history", "ai_review"):
-        stages.setdefault(name, {"status": "skipped", "reason": "not requested (use `armorix scan --deep`)"})
+        stages.setdefault(name, {"status": "not_requested", "reason": "not requested (use `armorix scan --deep`)"})
     return stages
 
 
 def not_run(result: ScanResult) -> list[tuple[str, str, str]]:
     """[(stage, status, reason)] for every stage that did not run in full."""
     return [(name, s["status"], s.get("reason", "")) for name, s in coverage(result).items()
-            if s["status"] not in {"completed", "applied"}]
+            if s["status"] not in {"completed", "applied", "not_requested"}]
 
 
 def apply_min_confidence(result: ScanResult, minimum: str) -> int:
