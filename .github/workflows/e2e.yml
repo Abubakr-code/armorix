@@ -88,6 +88,21 @@ jobs:
           armorix rules | head -3
           armorix update --check
 
+      # ── offline CVE database: the one network step, then dependency checks run without a connection ──
+      - name: Offline CVE database — download once, dependency CVEs are found
+        shell: bash
+        run: |
+          armorix db update
+          armorix db status
+          armorix scan "$SHOP" --format json --fail-on none > deps.json
+          python -c "
+          import json
+          d = json.load(open('deps.json', encoding='utf-8'))
+          deps = [f for f in d['findings'] if f['rule_id'] == 'ARX-DEP']
+          print(len(deps), 'vulnerable dependencies;', d.get('dependencies'))
+          assert deps, 'the database is installed but no dependency CVE was found'
+          "
+
       # ── local AI: llama.cpp + model downloaded by the CLI, then a verified patch ──
       - name: Local AI setup (llama.cpp + Qwen2.5-Coder, 1.1 GB)
         shell: bash

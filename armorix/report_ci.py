@@ -54,7 +54,8 @@ def to_markdown(result: ScanResult, lang: str = "en") -> str:
             for f in code[:100]:
                 title, message, _ = i18n.localize(f, lang)
                 review = f" _({t('review')})_" if f.confidence == "review" else ""
-                out.append(f"| {EMOJI[f.severity]} | `{f.rule_id}` {f.cwe} | `{f.file}:{f.line}` | **{title}**{review} — {message.replace('|', '\\|')} |")
+                cell = message.replace("|", "\\|")  # a backslash inside an f-string expression is a SyntaxError before Python 3.12
+                out.append(f"| {EMOJI[f.severity]} | `{f.rule_id}` {f.cwe} | `{f.file}:{f.line}` | **{title}**{review} — {cell} |")
             if len(code) > 100:
                 out.append(f"\n… +{len(code) - 100}")
         if deps:

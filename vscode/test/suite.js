@@ -46,6 +46,12 @@ async function body() {
 
   // 4) workspace scan fills other files, including dependency findings
   await vscode.commands.executeCommand("armorix.scanWorkspace");
-  const all = await until(() => { let n = 0; api.diagnostics.forEach((_, l) => (n += l.length)); return n > 20 ? n : null; }, 120000);
-  console.log("workspace diagnostics:", all);
+  // Code findings only: dependency CVEs need the offline OSV database (`armorix db update`), which a clean machine
+  // does not have yet — that path is covered by the e2e workflow. What matters here is that one scan fills many files.
+  const all = await until(() => {
+    let n = 0, files = 0;
+    api.diagnostics.forEach((_, l) => { n += l.length; if (l.length) files++; });
+    return n > 15 && files >= 3 ? { n, files } : null;
+  }, 120000);
+  console.log(`workspace diagnostics: ${all.n} in ${all.files} files`);
 }
